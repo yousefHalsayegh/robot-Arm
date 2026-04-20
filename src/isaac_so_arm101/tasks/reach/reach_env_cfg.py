@@ -53,7 +53,7 @@ class ReachSceneCfg(InteractiveSceneCfg):
     )
      #TODO make the path relative from where ever you run it
     arcade_stick = AssetBaseCfg(
-        prim_path = "/World/arcade_stick",
+        prim_path = "{ENV_REGEX_NS}/arcade_stick",
         spawn= sim_utils.UsdFileCfg(
             usd_path  = "src/assets/arcade_stick.usd",
         ),
