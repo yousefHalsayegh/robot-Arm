@@ -15,11 +15,11 @@ dependencies = [
 ]
 
 [project.scripts]
-train = "src.scripts.rsl_rl.train:main"
-play = "src.scripts.rsl_rl.play:main"
-list_envs = "src.scripts.list_envs:main"
-zero_agent = "src.scripts.zero_agent:main"
-random_agent = "src.scripts.random_agent:main"
+train = "isaac_so_arm101.scripts.rsl_rl.train:main"
+play = "isaac_so_arm101.scripts.rsl_rl.play:main"
+list_envs = "isaac_so_arm101.scripts.list_envs:main"
+zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
+random_agent = "isaac_so_arm101.scripts.random_agent:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
