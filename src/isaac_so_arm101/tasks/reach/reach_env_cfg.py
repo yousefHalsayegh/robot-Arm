@@ -29,7 +29,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-##
+
 # Scene definition
 ##
 
@@ -37,7 +37,6 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 @configclass
 class ReachSceneCfg(InteractiveSceneCfg):
     """Configuration for the scene with a robotic arm."""
-
     # world
     ground = AssetBaseCfg(
         prim_path="/World/ground",
@@ -52,6 +51,15 @@ class ReachSceneCfg(InteractiveSceneCfg):
         ),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(0.70711, 0.0, 0.0, 0.70711)),
     )
+     #TODO make the path relative from where ever you run it
+    arcade_stick = AssetBaseCfg(
+        prim_path = "/World/arcade_stick",
+        spawn= sim_utils.UsdFileCfg(
+            usd_path  = "src/assets/arcade_stick.usd",
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.45, 0.0, 0.0), rot=( -0.4999993,  -0.5000012, 0.4999988, 0.5000007)),
+    )
+
 
     # robots
     robot: ArticulationCfg = MISSING
@@ -61,8 +69,7 @@ class ReachSceneCfg(InteractiveSceneCfg):
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=2500.0),
     )
-
-
+   
 ##
 # MDP settings
 ##
