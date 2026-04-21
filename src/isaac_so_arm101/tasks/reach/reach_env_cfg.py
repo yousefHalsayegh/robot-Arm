@@ -8,6 +8,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from random import uniform
+
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
@@ -57,7 +59,7 @@ class ReachSceneCfg(InteractiveSceneCfg):
         spawn= sim_utils.UsdFileCfg(
             usd_path  = "src/assets/arcade_stick.usd",
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.45, 0.0, 0.0), rot=( -0.4999993,  -0.5000012, 0.4999988, 0.5000007)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(uniform(0.25, 0.5),uniform(-0.1, 0.1), 0.0), rot=( -0.4999993,  -0.5000012, 0.4999988, 0.5000007)),
     )
 
 
