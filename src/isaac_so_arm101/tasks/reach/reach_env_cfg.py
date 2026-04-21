@@ -16,7 +16,7 @@ import isaaclab.sim as sim_utils
 
 # import mdp
 import isaaclab_tasks.manager_based.manipulation.reach.mdp as mdp
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ActionTermCfg as ActionTerm
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
@@ -54,7 +54,7 @@ class ReachSceneCfg(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.55, 0.0, 0.0), rot=(0.70711, 0.0, 0.0, 0.70711)),
     )
      #TODO make the path relative from where ever you run it
-    arcade_stick = AssetBaseCfg(
+    arcade_stick = RigidObjectCfg(
         prim_path = "{ENV_REGEX_NS}/arcade_stick",
         spawn= sim_utils.UsdFileCfg(
             usd_path  = "src/assets/arcade_stick.usd",
