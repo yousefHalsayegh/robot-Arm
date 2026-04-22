@@ -126,13 +126,12 @@ class SoArm101LiftCubeEnvCfg(LiftEnvCfg):
         # Set the body name for the end effector
         self.commands.object_pose.body_name = ["gripper_link"]
 
-        # Set Cube as object
+        # Set the arcade stick as an object
         self.scene.object = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Object",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.2, 0.0, 0.015], rot=[1, 0, 0, 0]),
+            prim_path="{ENV_REGEX_NS}/object",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.3, 0.0, 0.0], rot=[-0.4999993,  -0.5000012, 0.4999988, 0.5000007]),
             spawn=UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-                scale=(0.5, 0.5, 0.5),
+                usd_path="src/assets/arcade_stick_physics.usd",
                 rigid_props=RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=1,
@@ -153,11 +152,20 @@ class SoArm101LiftCubeEnvCfg(LiftEnvCfg):
             debug_vis=True,
             visualizer_cfg=marker_cfg,
             target_frames=[
+                #robot end-effector
                 FrameTransformerCfg.FrameCfg(
                     prim_path="{ENV_REGEX_NS}/Robot/gripper_link",
                     name="end_effector",
                     offset=OffsetCfg(
                         pos=[0.01, 0.0, -0.09],
+                    ),
+                ),
+                #joystik knob
+                FrameTransformerCfg.FrameCfg(
+                    prim_path="{ENV_REGEX_NS}/object",
+                    name="joystick_tip",
+                    offset=OffsetCfg(
+                        pos=[-0.6339, 0.3387, 0.9243],
                     ),
                 ),
             ],

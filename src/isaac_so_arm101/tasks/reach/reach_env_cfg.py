@@ -57,9 +57,15 @@ class ReachSceneCfg(InteractiveSceneCfg):
     arcade_stick = RigidObjectCfg(
         prim_path = "{ENV_REGEX_NS}/arcade_stick",
         spawn= sim_utils.UsdFileCfg(
-            usd_path  = "src/assets/arcade_stick.usd",
+            usd_path  = "src/assets/arcade_stick_physics.usd",
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            rigid_body_enabled=True,
+            max_depenetration_velocity=1.0,
         ),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(uniform(0.25, 0.5),uniform(-0.1, 0.1), 0.0), rot=( -0.4999993,  -0.5000012, 0.4999988, 0.5000007)),
+        mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
+        collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(uniform(0.25, 0.5),uniform(-0.1, 0.1), 0.0), rot=( -0.4999993,  -0.5000012, 0.4999988, 0.5000007)),
     )
 
 
