@@ -16,7 +16,7 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import (
     FrameTransformerCfg,
     OffsetCfg,
 )
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg, MassPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -140,7 +140,9 @@ class SoArm101LiftCubeEnvCfg(LiftEnvCfg):
                     max_depenetration_velocity=5.0,
                     disable_gravity=False,
                 ),
+                 mass_props=MassPropertiesCfg(mass=2),
             ),
+           
         )
 
         # Listens to the required transforms
@@ -149,7 +151,7 @@ class SoArm101LiftCubeEnvCfg(LiftEnvCfg):
         marker_cfg.prim_path = "/Visuals/FrameTransformer"
         self.scene.ee_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Robot/base_link",
-            debug_vis=True,
+            debug_vis=False,
             visualizer_cfg=marker_cfg,
             target_frames=[
                 #robot end-effector
@@ -165,7 +167,7 @@ class SoArm101LiftCubeEnvCfg(LiftEnvCfg):
                     prim_path="{ENV_REGEX_NS}/object",
                     name="joystick_tip",
                     offset=OffsetCfg(
-                        pos=[-0.6339, 0.3387, 0.9243],
+                        pos=[-0.065, 0.11, -0.025],
                     ),
                 ),
             ],

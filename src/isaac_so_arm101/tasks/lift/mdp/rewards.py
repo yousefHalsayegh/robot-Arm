@@ -1,12 +1,4 @@
-# Copyright (c) 2024-2025, Muammer Bay (LycheeAI), Louis Le Lay
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+
 
 from __future__ import annotations
 
@@ -15,22 +7,55 @@ from typing import TYPE_CHECKING
 import torch
 from isaaclab.assets import RigidObject, Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import FrameTransformer
+from isaaclab.sensors import FrameTransformer, Camera 
 from isaaclab.utils.math import combine_frame_transforms
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-#TODO fix up the overal wording to fit the theme of what I am doing more
 
-# def object_is_lifted(
-#     env: ManagerBasedRLEnv, minimal_height: float, object_cfg: SceneEntityCfg = SceneEntityCfg("object")
-# ) -> torch.Tensor:
-#     """Reward the agent for lifting the object above the minimal height."""
-#     object: RigidObject = env.scene[object_cfg.name]
-#     return torch.where(object.data.root_pos_w[:, 2] > minimal_height, 1.0, 0.0)
+#helper
+def _centroid_of_color(
+    rgb: torch.Tensor,
+    target_rgb: tuple[float, float, float],
+    threshold: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Find the pixel centroid of a colour in the image.
+ 
+    Args:
+        rgb:        (num_envs, H, W, 3) float32 0-1
+        target_rgb: Target colour (r, g, b) in 0-1
+        threshold:  L1 colour distance tolerance
+ 
+    Returns:
+        centroid_u: (num_envs,) horizontal pixel coordinate (or -1 if not found)
+        centroid_v: (num_envs,) vertical   pixel coordinate (or -1 if not found)
+    """
+    num_envs, H, W, _ = rgb.shape
+    device = rgb.device
+ 
+    target = torch.tensor(target_rgb, device=device, dtype=torch.float32)
+    dist   = (rgb - target).abs().sum(dim=-1)   # (num_envs, H, W)
+    mask   = (dist < threshold).float()          # (num_envs, H, W)
+ 
+    # Pixel coordinate grids
+    u_grid = torch.arange(W, device=device).float().view(1, 1, W).expand(num_envs, H, W)
+    v_grid = torch.arange(H, device=device).float().view(1, H, 1).expand(num_envs, H, W)
+ 
+    total = mask.sum(dim=(-1, -2)).clamp(min=1e-6)  # (num_envs,)
+ 
+    centroid_u = (mask * u_grid).sum(dim=(-1, -2)) / total  # (num_envs,)
+    centroid_v = (mask * v_grid).sum(dim=(-1, -2)) / total
+ 
+    # Mark envs where colour was not found at all
+    found = mask.sum(dim=(-1, -2)) > 0   # (num_envs,)
+    centroid_u = torch.where(found, centroid_u, torch.full_like(centroid_u, -1.0))
+    centroid_v = torch.where(found, centroid_v, torch.full_like(centroid_v, -1.0))
+ 
+    return centroid_u, centroid_v
 
 
+# The below is the direct way
 def object_ee_distance(
     env: ManagerBasedRLEnv,
     std: float,
@@ -88,41 +113,75 @@ def grap_and_hold_object(
 
     return (compare & closed).float()
 
+# The camera way 
 
 
-# def object_goal_distance(
-#     env: ManagerBasedRLEnv,
-#     std: float,
-#     minimal_height: float,
-#     command_name: str,
-#     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-#     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
-# ) -> torch.Tensor:
-#     """Reward the agent for tracking the goal pose using tanh-kernel."""
-#     # extract the used quantities (to enable type-hinting)
-#     robot: RigidObject = env.scene[robot_cfg.name]
-#     object: RigidObject = env.scene[object_cfg.name]
-#     command = env.command_manager.get_command(command_name)
-#     # compute the desired position in the world frame
-#     des_pos_b = command[:, :3]
-#     des_pos_w, _ = combine_frame_transforms(robot.data.root_state_w[:, :3], robot.data.root_state_w[:, 3:7], des_pos_b)
-#     # distance of the end-effector to the object: (num_envs,)
-#     distance = torch.norm(des_pos_w - object.data.root_pos_w[:, :3], dim=1)
-#     # rewarded if the object is lifted above the threshold
-#     return (object.data.root_pos_w[:, 2] > minimal_height) * (1 - torch.tanh(distance / std))
+def joystick_reach_reward(
+    env: ManagerBasedRLEnv,
+    std: float,
+    rob_rgb : set,
+    joy_rgb : set,
+    joy_threshold: float, 
+    rob_threshold: float,
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+) -> torch.Tensor:
+    
+    camera: Camera               = env.scene[camera_cfg.name]
+ 
+
+    #data from the camera 
+    rgb = camera.data.output.get("rgb", None)
+
+    #joystick centroid 
+    joy_u, joy_v = _centroid_of_color(
+        rgb, joy_rgb, joy_threshold
+    )
+
+    #robot/gripper centroid 
+    rob_u, rob_v = _centroid_of_color(
+        rgb, rob_rgb, rob_threshold
+    )
+
+    du = joy_u - rob_u
+    dv = joy_v - rob_v
+    pixel_dist = torch.sqrt(du * du + dv * dv)
+
+    visible = (joy_u >= 0) & (rob_u >= 0)
+    reward = 1.0 - torch.tanh(pixel_dist / std)
+
+    return torch.where(visible, reward, torch.zeros_like(reward))
 
 
-# def object_ee_distance_and_lifted(
-#     env: ManagerBasedRLEnv,
-#     std: float,
-#     minimal_height: float,
-#     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
-#     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-# ) -> torch.Tensor:
-#     """Combined reward for reaching the object AND lifting it."""
-#     # Get reaching reward
-#     reach_reward = object_ee_distance(env, std, object_cfg, ee_frame_cfg)
-#     # Get lifting reward
-#     lift_reward = object_is_lifted(env, minimal_height, object_cfg)
-#     # Combine rewards multiplicatively
-#     return reach_reward * lift_reward
+def touch_joystick(
+    env: ManagerBasedRLEnv,
+    touch: float,
+    rob_rgb : set,
+    joy_rgb : set,
+    joy_threshold: float, 
+    rob_threshold: float,
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+        
+)-> torch.Tensor:
+    camera: Camera               = env.scene[camera_cfg.name]
+
+    #data from the camera 
+    rgb = camera.data.output.get("rgb", None)
+    
+
+    #joystick centroid 
+    joy_u, joy_v = _centroid_of_color(
+        rgb, joy_rgb, joy_threshold
+    )
+
+    #robot/gripper centroid 
+    rob_u, rob_v = _centroid_of_color(
+        rgb, rob_rgb, rob_threshold
+    )
+
+    visible = (joy_u >= 0) & (rob_u >= 0)
+    
+    du = joy_u - rob_u
+    dv = joy_v - rob_v
+    pixel_dist = torch.sqrt(du * du + dv * dv)
+    
+    return (visible & (pixel_dist < touch)).float()

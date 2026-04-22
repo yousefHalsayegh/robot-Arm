@@ -30,6 +30,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -78,7 +79,17 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
-
+    camera = CameraCfg(
+        prim_path = "{ENV_REGEX_NS}/camera",
+        update_period=0.1,
+        height=400,
+        width=400,
+        data_types=["rgb", "distance_to_image_plane"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=15.0, focus_distance=200.0, horizontal_aperture=20.955, clipping_range=(0.1, 1.0e5)
+        ),
+        offset=CameraCfg.OffsetCfg(pos=(1.3, 0.0, 0.1), rot=(0, 0.0, 0, 0.1), convention="world"),
+    )
 
 ##
 # MDP settings
@@ -157,34 +168,29 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    reaching_object = RewTerm(func=mdp.object_ee_distance, params={"std": 0.05}, weight=1.0)
+    # reaching_object = RewTerm(func=mdp.object_ee_distance, params={"std": 0.05}, weight=1.0)
 
-    graping_object = RewTerm(func=mdp.graping_object,  params={"threshold": 0.05}, weight=5.0)
+    # graping_object = RewTerm(func=mdp.graping_object,  params={"threshold": 0.05}, weight=5.0)
 
-    grap_and_hold_object = RewTerm(func=mdp.grap_and_hold_object, params={"threshold": 0.05}, weight=10.0 )
+    # grap_and_hold_object = RewTerm(func=mdp.grap_and_hold_object, params={"threshold": 0.05}, weight=10.0 )
 
-    # lifting_object = RewTerm(func=mdp.object_is_lifted, params={"minimal_height": 0.025}, weight=15.0)
+    reach_reward = RewTerm(func=mdp.joystick_reach_reward, params={
+        "std": 80,
+        "rob_rgb" : (0.85,0.55,0.15),
+        "joy_rgb": (0.75,0.75,0.93),
+        "joy_threshold": 0.2,
+        "rob_threshold": 0.2
+    }, weight=2.0)
 
-    # object_goal_tracking = RewTerm(
-    #     func=mdp.object_goal_distance,
-    #     params={"std": 0.3, "minimal_height": 0.025, "command_name": "object_pose"},
-    #     weight=16.0,
-    # )
+    touch_reward = RewTerm(func=mdp.touch_joystick, params={
+        "touch": 0.05,
+        "rob_rgb" : (0.85,0.55,0.15),
+        "joy_rgb": (0.75,0.75,0.93),
+        "joy_threshold": 0.2,
+        "rob_threshold": 0.2
+    }, weight=4.0)
 
-    # object_goal_tracking_fine_grained = RewTerm(
-    #     func=mdp.object_goal_distance,
-    #     params={"std": 0.05, "minimal_height": 0.025, "command_name": "object_pose"},
-    #     weight=5.0,
-    # )
 
-    # action penalty
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
-
-    joint_vel = RewTerm(
-        func=mdp.joint_vel_l2,
-        weight=-1e-4,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
 
 
 @configclass
@@ -201,14 +207,14 @@ class TerminationsCfg:
 @configclass
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
+    pass
+    # action_rate = CurrTerm(
+    #     func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10000}
+    # )
 
-    action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10000}
-    )
-
-    joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10000}
-    )
+    # joint_vel = CurrTerm(
+    #     func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -1e-1, "num_steps": 10000}
+    # )
 
 
 ##
