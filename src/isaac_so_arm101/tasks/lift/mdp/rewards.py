@@ -14,45 +14,104 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-#helper
-def _centroid_of_color(
+#camera help
+def _get_images(
+    env: ManagerBasedRLEnv,
+    camera_cfg: SceneEntityCfg,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    
+    camera: Camera = env.scene[camera_cfg.name]
+    rgb   = camera.data.output.get("rgb",   None)
+    depth = camera.data.output.get("distance_to_image_plane", None)
+    if rgb is None or depth is None:
+        return None, None
+    depth_f = depth[..., 0].clone()
+    depth_f[~torch.isfinite(depth_f)] = 999.0
+    return rgb[..., :3], depth_f
+
+def _find_joystick_camera_space(
     rgb: torch.Tensor,
-    target_rgb: tuple[float, float, float],
-    threshold: float,
+    depth: torch.Tensor,
+    K: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Find the pixel centroid of a colour in the image.
- 
-    Args:
-        rgb:        (num_envs, H, W, 3) float32 0-1
-        target_rgb: Target colour (r, g, b) in 0-1
-        threshold:  L1 colour distance tolerance
- 
-    Returns:
-        centroid_u: (num_envs,) horizontal pixel coordinate (or -1 if not found)
-        centroid_v: (num_envs,) vertical   pixel coordinate (or -1 if not found)
-    """
-    num_envs, H, W, _ = rgb.shape
+    
+    _, H, W, _ = rgb.shape
     device = rgb.device
  
-    target = torch.tensor(target_rgb, device=device, dtype=torch.float32)
-    dist   = (rgb - target).abs().sum(dim=-1)   # (num_envs, H, W)
-    mask   = (dist < threshold).float()          # (num_envs, H, W)
+    r = rgb[..., 0].float()
+    g = rgb[..., 1].float()
+    b = rgb[..., 2].float()
+
+    blue_mask = (b > r + 20) & (b > g + 20) & (b > 100)
+    valid_depth = (depth > 0.05) & (depth < 10.0)
+    blue_mask   = blue_mask & valid_depth
  
-    # Pixel coordinate grids
-    u_grid = torch.arange(W, device=device).float().view(1, 1, W).expand(num_envs, H, W)
-    v_grid = torch.arange(H, device=device).float().view(1, H, 1).expand(num_envs, H, W)
+    found = blue_mask.any(dim=-1).any(dim=-1)
+    mask_f     = blue_mask.float()
+    depth_safe = depth.clamp(min=0.01)
+    weights    = mask_f / depth_safe            # (N, H, W)
+    total      = weights.sum(dim=(-2,-1)).clamp(min=1e-6)  # (N,)
  
-    total = mask.sum(dim=(-1, -2)).clamp(min=1e-6)  # (num_envs,)
+    u_grid = torch.arange(W, device=device).float().view(1, 1, W)
+    v_grid = torch.arange(H, device=device).float().view(1, H, 1)
  
-    centroid_u = (mask * u_grid).sum(dim=(-1, -2)) / total  # (num_envs,)
-    centroid_v = (mask * v_grid).sum(dim=(-1, -2)) / total
+    # Weighted centroid pixel
+    u_joy = (weights * u_grid).sum(dim=(-2,-1)) / total   # (N,)
+    v_joy = (weights * v_grid).sum(dim=(-2,-1)) / total   # (N,)
  
-    # Mark envs where colour was not found at all
-    found = mask.sum(dim=(-1, -2)) > 0   # (num_envs,)
-    centroid_u = torch.where(found, centroid_u, torch.full_like(centroid_u, -1.0))
-    centroid_v = torch.where(found, centroid_v, torch.full_like(centroid_v, -1.0))
+    # Weighted mean depth — biased toward shallowest blue pixels
+    d_joy = (weights * depth).sum(dim=(-2,-1)) / total    # (N,)
  
-    return centroid_u, centroid_v
+    # Unproject to camera-space 3D
+    fx = K[:, 0, 0];  fy = K[:, 1, 1]
+    cx = K[:, 0, 2];  cy = K[:, 1, 2]
+ 
+    X = (u_joy - cx) / fx * d_joy
+    Y = (v_joy - cy) / fy * d_joy
+    Z = d_joy
+ 
+    point_3d = torch.stack([X, Y, Z], dim=-1)   # (N, 3)
+    # Zero out not-found envs
+    point_3d = point_3d * found.float().unsqueeze(-1)
+ 
+    return point_3d, found
+
+def _world_to_camera_space(
+    points_w: torch.Tensor,
+    camera: Camera,
+) -> torch.Tensor:
+    #this seem to assume that it knows the camera position in relation to the world, which I might need ot chnage or set to make it easier
+    cam_pos  = camera.data.pos_w        # (N, 3)
+    cam_quat = camera.data.quat_w_ros   # (N, 4) w,x,y,z
+ 
+    # Build R^T (world → camera rotation)
+    w = cam_quat[:, 0:1]; x = cam_quat[:, 1:2]
+    y = cam_quat[:, 2:3]; z = cam_quat[:, 3:4]
+ 
+    # Row vectors of rotation matrix (world → camera = R^T)
+    # R maps camera→world, so R^T maps world→camera
+    Rt0 = torch.cat([1-2*(y*y+z*z),  2*(x*y+w*z),   2*(x*z-w*y)], dim=-1)  # (N,3)
+    Rt1 = torch.cat([2*(x*y-w*z),    1-2*(x*x+z*z), 2*(y*z+w*x)], dim=-1)
+    Rt2 = torch.cat([2*(x*z+w*y),    2*(y*z-w*x),   1-2*(x*x+y*y)], dim=-1)
+ 
+    # Translate then rotate
+    delta = points_w - cam_pos          # (N, 3)
+    px = (delta * Rt0).sum(dim=-1)
+    py = (delta * Rt1).sum(dim=-1)
+    pz = (delta * Rt2).sum(dim=-1)
+ 
+    return torch.stack([px, py, pz], dim=-1)   # (N, 3)
+
+
+#sensor help 
+def _get_gripper_position_from_joints(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    
+    ee_frame : FrameTransformer = env.scene[ee_frame_cfg.name]
+    ee_w = ee_frame.data.target_pos_w[..., 0, :]
+    return ee_w
 
 
 # The below is the direct way
@@ -119,69 +178,43 @@ def grap_and_hold_object(
 def joystick_reach_reward(
     env: ManagerBasedRLEnv,
     std: float,
-    rob_rgb : set,
-    joy_rgb : set,
-    joy_threshold: float, 
-    rob_threshold: float,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
 ) -> torch.Tensor:
     
-    camera: Camera               = env.scene[camera_cfg.name]
- 
+    camera : Camera = env.scene[camera_cfg.name]
+    rgb, depth = _get_images(env, camera_cfg)
 
-    #data from the camera 
-    rgb = camera.data.output.get("rgb", None)
+    K = camera.data.intrinsic_matrices
 
-    #joystick centroid 
-    joy_u, joy_v = _centroid_of_color(
-        rgb, joy_rgb, joy_threshold
-    )
 
-    #robot/gripper centroid 
-    rob_u, rob_v = _centroid_of_color(
-        rgb, rob_rgb, rob_threshold
-    )
+    joy_cam, joy_found = _find_joystick_camera_space(rgb, depth, K)
+    gripper_w   = _get_gripper_position_from_joints(env, ee_frame_cfg)
+    gripper_cam = _world_to_camera_space(gripper_w, camera)
 
-    du = joy_u - rob_u
-    dv = joy_v - rob_v
-    pixel_dist = torch.sqrt(du * du + dv * dv)
+    distance = (joy_cam - gripper_cam).norm(dim=-1)   # (N,)
+    reward   = 1.0 - torch.tanh(distance / std)
 
-    visible = (joy_u >= 0) & (rob_u >= 0)
-    reward = 1.0 - torch.tanh(pixel_dist / std)
-
-    return torch.where(visible, reward, torch.zeros_like(reward))
+    return torch.where(joy_found, reward, torch.zeros_like(reward))
 
 
 def touch_joystick(
     env: ManagerBasedRLEnv,
     touch: float,
-    rob_rgb : set,
-    joy_rgb : set,
-    joy_threshold: float, 
-    rob_threshold: float,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
-        
-)-> torch.Tensor:
-    camera: Camera               = env.scene[camera_cfg.name]
-
-    #data from the camera 
-    rgb = camera.data.output.get("rgb", None)
+) -> torch.Tensor:
     
+    camera: Camera = env.scene[camera_cfg.name]
+    rgb, depth = _get_images(env, camera_cfg)
 
-    #joystick centroid 
-    joy_u, joy_v = _centroid_of_color(
-        rgb, joy_rgb, joy_threshold
-    )
-
-    #robot/gripper centroid 
-    rob_u, rob_v = _centroid_of_color(
-        rgb, rob_rgb, rob_threshold
-    )
-
-    visible = (joy_u >= 0) & (rob_u >= 0)
-    
-    du = joy_u - rob_u
-    dv = joy_v - rob_v
-    pixel_dist = torch.sqrt(du * du + dv * dv)
-    
-    return (visible & (pixel_dist < touch)).float()
+ 
+    K = camera.data.intrinsic_matrices
+ 
+    joy_cam,    joy_found  = _find_joystick_camera_space(rgb, depth, K)
+    gripper_w              = _get_gripper_position_from_joints(env, ee_frame_cfg)
+    gripper_cam            = _world_to_camera_space(gripper_w, camera)
+ 
+    distance = (joy_cam - gripper_cam).norm(dim=-1)
+ 
+    return (joy_found & (distance < touch)).float()

@@ -104,7 +104,7 @@ class CommandsCfg:
         asset_name="robot",
         body_name=MISSING,  # will be set by agent env cfg
         resampling_time_range=(5.0, 5.0),
-        debug_vis=True,
+        debug_vis=False,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
             pos_x=(-0.1, 0.1),
             pos_y=(-0.3, -0.1),
@@ -175,19 +175,11 @@ class RewardsCfg:
     # grap_and_hold_object = RewTerm(func=mdp.grap_and_hold_object, params={"threshold": 0.05}, weight=10.0 )
 
     reach_reward = RewTerm(func=mdp.joystick_reach_reward, params={
-        "std": 80,
-        "rob_rgb" : (0.85,0.55,0.15),
-        "joy_rgb": (0.75,0.75,0.93),
-        "joy_threshold": 0.2,
-        "rob_threshold": 0.2
+        "std": 0.05,
     }, weight=2.0)
 
     touch_reward = RewTerm(func=mdp.touch_joystick, params={
-        "touch": 0.05,
-        "rob_rgb" : (0.85,0.55,0.15),
-        "joy_rgb": (0.75,0.75,0.93),
-        "joy_threshold": 0.2,
-        "rob_threshold": 0.2
+        "touch": 0.05
     }, weight=4.0)
 
 
