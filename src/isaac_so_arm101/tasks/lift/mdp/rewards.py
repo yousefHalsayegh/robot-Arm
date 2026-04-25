@@ -35,7 +35,7 @@ def _find_joystick_camera_space(
     K: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     
-    _, H, W, _ = rgb.shape
+    num_envs, H, W, _ = rgb.shape
     device = rgb.device
  
     r = rgb[..., 0].float()
@@ -58,14 +58,25 @@ def _find_joystick_camera_space(
     # Weighted centroid pixel
     u_joy = (weights * u_grid).sum(dim=(-2,-1)) / total   # (N,)
     v_joy = (weights * v_grid).sum(dim=(-2,-1)) / total   # (N,)
- 
+    
+
+    u_idx = u_joy.long().clamp(0, W-1)
+    v_idx = v_joy.long().clamp(0, H-1)
+    env_idx = torch.arange(rgb.shape[0], device=device)
     # Weighted mean depth — biased toward shallowest blue pixels
-    d_joy = (weights * depth).sum(dim=(-2,-1)) / total    # (N,)
+    d_at_centroid = depth[env_idx, v_idx, u_idx]
+    depth_masked = torch.where(blue_mask, depth, torch.full_like(depth, 999.0))
+    d_min        = depth_masked.reshape(num_envs, -1).min(dim=-1).values
+    centroid_valid = (d_at_centroid > 0.05) & (d_at_centroid < 10.0)
+    d_joy = torch.where(centroid_valid, d_at_centroid, d_min)
+
+    print(f"u_joy={u_joy[0]:.1f} v_joy={v_joy[0]:.1f} d_joy={d_joy[0]:.3f}m")
+    print(f"blue pixels found: {blue_mask[0].sum().item()}")
  
     # Unproject to camera-space 3D
     fx = K[:, 0, 0];  fy = K[:, 1, 1]
     cx = K[:, 0, 2];  cy = K[:, 1, 2]
- 
+
     X = (u_joy - cx) / fx * d_joy
     Y = (v_joy - cy) / fy * d_joy
     Z = d_joy
@@ -73,13 +84,13 @@ def _find_joystick_camera_space(
     point_3d = torch.stack([X, Y, Z], dim=-1)   # (N, 3)
     # Zero out not-found envs
     point_3d = point_3d * found.float().unsqueeze(-1)
- 
     return point_3d, found
 
-def _world_to_camera_space(
-    points_w: torch.Tensor,
+def _camera_to_world_space(
+    points_cam: torch.Tensor,
     camera: Camera,
 ) -> torch.Tensor:
+
     #this seem to assume that it knows the camera position in relation to the world, which I might need ot chnage or set to make it easier
     cam_pos  = camera.data.pos_w        # (N, 3)
     cam_quat = camera.data.quat_w_ros   # (N, 4) w,x,y,z
@@ -94,13 +105,12 @@ def _world_to_camera_space(
     Rt1 = torch.cat([2*(x*y-w*z),    1-2*(x*x+z*z), 2*(y*z+w*x)], dim=-1)
     Rt2 = torch.cat([2*(x*z+w*y),    2*(y*z-w*x),   1-2*(x*x+y*y)], dim=-1)
  
-    # Translate then rotate
-    delta = points_w - cam_pos          # (N, 3)
-    px = (delta * Rt0).sum(dim=-1)
-    py = (delta * Rt1).sum(dim=-1)
-    pz = (delta * Rt2).sum(dim=-1)
- 
-    return torch.stack([px, py, pz], dim=-1)   # (N, 3)
+    # Translate then rotate        # (N, 3)
+    px = (points_cam * Rt0).sum(dim=-1)
+    py = (points_cam * Rt1).sum(dim=-1)
+    pz = (points_cam * Rt2).sum(dim=-1)
+    
+    return torch.stack([px, py, pz], dim=-1) + cam_pos # (N, 3)
 
 
 #sensor help 
@@ -190,9 +200,16 @@ def joystick_reach_reward(
 
     joy_cam, joy_found = _find_joystick_camera_space(rgb, depth, K)
     gripper_w   = _get_gripper_position_from_joints(env, ee_frame_cfg)
-    gripper_cam = _world_to_camera_space(gripper_w, camera)
+    joy_w = _camera_to_world_space(joy_cam, camera)
 
-    distance = (joy_cam - gripper_cam).norm(dim=-1)   # (N,)
+    print(f"Detected joystick in camera space: {joy_cam[0]}")
+    print(f"Expected:                          (0.070, 0.020, 0.923)")
+    print(f"Camera pos: {camera.data.pos_w[0]}")
+
+    # After computing joy_w:
+    print(f"Recovered joystick world pos: {joy_w[0]}")
+    print(f"Expected:                     (0.377, 0.07, 0.08)")
+    distance = (joy_w - gripper_w).norm(dim=-1)   # (N,)
     reward   = 1.0 - torch.tanh(distance / std)
 
     return torch.where(joy_found, reward, torch.zeros_like(reward))
@@ -213,8 +230,8 @@ def touch_joystick(
  
     joy_cam,    joy_found  = _find_joystick_camera_space(rgb, depth, K)
     gripper_w              = _get_gripper_position_from_joints(env, ee_frame_cfg)
-    gripper_cam            = _world_to_camera_space(gripper_w, camera)
+    joy_w            = _camera_to_world_space(joy_cam, camera)
  
-    distance = (joy_cam - gripper_cam).norm(dim=-1)
+    distance = (joy_w - gripper_w).norm(dim=-1)
  
     return (joy_found & (distance < touch)).float()

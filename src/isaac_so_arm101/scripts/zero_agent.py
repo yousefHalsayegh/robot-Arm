@@ -58,8 +58,7 @@ def main():
             actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
             # apply actions
             env.step(actions)
-            debug_camera_colors(env)
-              
+        
             
 
     # close the simulator
