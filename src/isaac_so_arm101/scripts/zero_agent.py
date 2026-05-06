@@ -45,9 +45,6 @@ def main():
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
-    # print info (this is vectorized environment)
-    print(f"[INFO]: Gym observation space: {env.observation_space}")
-    print(f"[INFO]: Gym action space: {env.action_space}")
     # reset environment
     env.reset()
     # simulate environment
