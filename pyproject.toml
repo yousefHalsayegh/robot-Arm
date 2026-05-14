@@ -1,11 +1,8 @@
 [project]
-name = "isaac-so-arm101"
+name = "sim"
 version = "1.2.0"
 description = "Reinforcement Learning with the SO-ARM100 / SO-ARM101 in Isaac Lab"
 readme = "README.md"
-authors = [
-    { name = "Louis Le Lay", email = "le.lay.louis@gmail.com" }
-]
 requires-python = "==3.11.*"
 dependencies = [
     "isaaclab[all,isaacsim]==2.3.0",
@@ -15,10 +12,10 @@ dependencies = [
 ]
 
 [project.scripts]
-list_envs = "isaac_so_arm101.scripts.list_envs:main"
-zero_agent = "isaac_so_arm101.scripts.zero_agent:main"
-random_agent = "isaac_so_arm101.scripts.random_agent:main"
-generate = "isaac_so_arm101.scripts.generate:main"
+list_envs = "sim.scripts.list_envs:main"
+zero_agent = "sim.scripts.zero_agent:main"
+random_agent = "sim.scripts.random_agent:main"
+generate = "sim.scripts.generate:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"
