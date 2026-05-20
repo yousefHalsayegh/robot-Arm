@@ -1,168 +1,64 @@
 """
-Usage:  python game.py
-
-Type 'up' or 'down' + Enter to switch the robot task.
-The robot rolls out continuously on the current task.
+the ALE part
 """
 
-import sys
-import time
+import inputs
 import numpy as np
 import gymnasium as gym
 import ale_py
-import torch
 
-from lerobot.policies.act.modeling_act import ACTPolicy
-from lerobot.common.control_utils import predict_action, prepare_observation_for_inference
-from lerobot.rollout.context import make_pre_post_processors
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
-from lerobot.robots.so_follower.so_follower import SOFollower
-from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-POLICY_PATH   = "/home/yousef/Documents/lerobot/outputs/train/act_fighter_V1.6/checkpoints/010000/pretrained_model/"
-ROBOT_PORT    = "/dev/ttyFOLLOWER"
-ROBOT_ID      = "fighter_f"
-CAMERA_SERIAL = "032522250421"
-FPS           = 30
-
-TASK_UP   = "up"
-TASK_DOWN = "down"
-
-_ALE_ACTION = {
-    TASK_UP:   ale_py.Action.UP.value,
-    TASK_DOWN: ale_py.Action.DOWN.value,
-}
-
-# ---------------------------------------------------------------------------
-# Setup
-# ---------------------------------------------------------------------------
 
 gym.register_envs(ale_py)
 
-config = SOFollowerRobotConfig(
-    port=ROBOT_PORT,
-    id=ROBOT_ID,
-    max_relative_target=10.0,
-    use_degrees=True,
-    cameras={
-        "observation.images.front": RealSenseCameraConfig(
-            serial_number_or_name=CAMERA_SERIAL,
-            use_depth="true",
-            width=1280,
-            height=720,
-            fps=FPS,
-        )
-    },
-)
-robot = SOFollower(config)
-robot.connect()
+CONTROLLER_TO_ACTION = {
+    ("ABS_HAT0X", -1): "LEFT",
+    ("ABS_HAT0X",  1): "RIGHT",
+    ("ABS_HAT0Y", -1): "UP",
+    ("ABS_HAT0Y",  1): "DOWN",
+    ("BTN_SOUTH",  1): "FIRE",       # A 
+    ("BTN_EAST",   1): "FIRE",       # B 
+    ("BTN_NORTH",  1): "FIRE",     # Y
+    ("BTN_WEST",   1): "FIRE",   # X
+    ("BTN_TR",     1): "FIRE",  # R1
+    ("BTN_TL",     1): "FIRE",   # L1
+    ("BTN_TR2",    1): "FIRE",   # R2
+    ("BTN_TL2",    1): "FIRE",     # L2
+}
 
-policy = ACTPolicy.from_pretrained(POLICY_PATH)
-policy.eval()
-device = torch.device(policy.config.device)
-
-preprocessor, postprocessor = make_pre_post_processors(
-    policy.config,
-    pretrained_path=POLICY_PATH,
-)
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def rollout_task(env, task, n_steps):
-    print(f"\n[task={task}] running {n_steps} steps...")
-    policy.reset()
-
-    for _ in range(n_steps):
-        t0 = time.perf_counter()
-
-        # Step emulator
-        _, _, terminated, truncated, _ = env.step(_ALE_ACTION[task])
-
-        # Get raw observation from robot
-        observation = robot.get_observation()
-
-        # The policy expects:
-        #   observation.state      -> np.ndarray shape (n_joints,)  all joint positions stacked
-        #   observation.images.*   -> np.ndarray shape (H, W, 3)    camera frames unchanged
-        # robot.get_observation() returns individual float scalars per joint, so stack them.
-        joint_keys = sorted(
-            k for k in observation
-            if not k.startswith("observation.images.")
-        )
-        state = np.array([
-            observation[k] if not isinstance(observation[k], np.ndarray) else observation[k].item()
-            for k in joint_keys
-        ], dtype=np.float32)
-        observation = {
-            "observation.state": state,
-            **{k: v for k, v in observation.items() if k.startswith("observation.images.")},
-        }
-
-        # predict_action handles: prepare obs → normalize → policy → denormalize
-        action_values = predict_action(
-            observation=observation,
-            policy=policy,
-            device=device,
-            preprocessor=preprocessor,
-            postprocessor=postprocessor,
-            use_amp=False,
-            task=task,
-            robot_type=robot.robot_type,
-        )
-
-        # action_values is a 1D tensor of shape (n_joints,)
-        action_values = action_values.flatten()
-        action = {
-            key: action_values[i].item()
-            for i, key in enumerate(robot.action_features)
-        }
-
-        robot.send_action(action)
-
-        joints = "  ".join(f"{k.split('.')[0][:4]}={v:+.1f}" for k, v in action.items())
-        print(f"\r[{task}] {joints}   ", end="", flush=True)
-
-        if terminated or truncated:
-            env.reset()
-            policy.reset()
-
-        time.sleep(max(0, 1.0 / FPS - (time.perf_counter() - t0)))
-
+def read_controller_action() -> tuple[str, int] | tuple[None, None]:
+    events = inputs.get_gamepad()
+    for e in events:
+        if e.ev_type in ("Sync", "Misc"):
+            continue
+        action_name = CONTROLLER_TO_ACTION.get((e.code, e.state))
+        if action_name:
+            action_int = getattr(ale_py.Action, action_name).value
+            return action_name, action_int
+    return None, None
 
 def main():
     env = gym.make("ALE/Pong-v5", render_mode="human", frameskip=8)
     env.reset(seed=42)
 
-    task = TASK_UP
-    STEPS_PER_INPUT = 50
-
-    print("=" * 50)
-    print(f"Current task: {task}")
-    print("Enter to continue | up/down + Enter to switch | q to quit")
-    print("=" * 50)
-
     try:
         while True:
-            rollout_task(env, task, STEPS_PER_INPUT)
+            action_name, action_int = read_controller_action()
 
-            print(f"\n[input] current={task}: ", end="", flush=True)
-            val = sys.stdin.readline().strip().lower()
+            if action_name is None:
+                continue
 
-            if val == "q":
-                break
-            elif val in (TASK_UP, TASK_DOWN):
-                task = val
-                print(f"[input] task → {task}")
+            # Step the ALE game
+            obs, reward, terminated, truncated, info = env.step(action_int)
+            # add this temporarily before the main loop in game.py
+
+
+            if terminated or truncated:
+                obs, info = env.reset()
 
     finally:
-        robot.disconnect()
         env.close()
+
 
 
 if __name__ == "__main__":
