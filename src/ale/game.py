@@ -2,61 +2,107 @@
 the ALE part
 """
 
-import inputs
+import time
 import numpy as np
 import gymnasium as gym
 import ale_py
+import cv2
+from collections import deque
+import os
 
+from brain import Brain
+import config
 
+class Frames():
+    def __init__(self, n=4):
+        self.frames = deque(maxlen=n)
+        self.n = n
+
+    def preprocess(self, img):
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = cv2.resize(img, (84,84))
+        img = img/255.0
+
+        return img.astype(np.float32)
+    
+    def reset(self, img):
+        proc = self.preprocess(img)
+        for _ in range(self.n):
+            self.frames.append(proc)
+        return self._get_state()
+    
+    def step(self, img):
+        self.frames.append(self.preprocess(img))
+        return self._get_state()
+    
+    def _get_state(self):
+        return np.stack(self.frames, axis=0)
 
 gym.register_envs(ale_py)
 
-CONTROLLER_TO_ACTION = {
-    ("ABS_HAT0X", -1): "LEFT",
-    ("ABS_HAT0X",  1): "RIGHT",
-    ("ABS_HAT0Y", -1): "UP",
-    ("ABS_HAT0Y",  1): "DOWN",
-    ("BTN_SOUTH",  1): "FIRE",       # A 
-    ("BTN_EAST",   1): "FIRE",       # B 
-    ("BTN_NORTH",  1): "FIRE",     # Y
-    ("BTN_WEST",   1): "FIRE",   # X
-    ("BTN_TR",     1): "FIRE",  # R1
-    ("BTN_TL",     1): "FIRE",   # L1
-    ("BTN_TR2",    1): "FIRE",   # R2
-    ("BTN_TL2",    1): "FIRE",     # L2
-}
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
-def read_controller_action() -> tuple[str, int] | tuple[None, None]:
-    events = inputs.get_gamepad()
-    for e in events:
-        if e.ev_type in ("Sync", "Misc"):
-            continue
-        action_name = CONTROLLER_TO_ACTION.get((e.code, e.state))
-        if action_name:
-            action_int = getattr(ale_py.Action, action_name).value
-            return action_name, action_int
-    return None, None
 
 def main():
-    env = gym.make("ALE/Pong-v5", render_mode="human", frameskip=8)
+    env = gym.make("ALE/Pong-v5", frameskip=4)
     env.reset(seed=42)
+    frame = Frames()
+    brain = Brain()
+    steps = 0
+    start_time = time.time()
+    episode_time = []
+    path = "checkpoint/brain1030.pth"
+    if os.path.exists(path):
+        steps, start = brain.load_checkpoint(path)
+        print("loading... ", path )
+    else:
+        steps, start = 0, 0 
+
 
     try:
-        while True:
-            action_name, action_int = read_controller_action()
+        for episode in range(start, config.EPISODES):
 
-            if action_name is None:
-                continue
+            obs,_ = env.reset()
+            state = frame.reset(obs)
+            total_reward = 0
+            ep = time.time()
 
-            # Step the ALE game
-            obs, reward, terminated, truncated, info = env.step(action_int)
-            # add this temporarily before the main loop in game.py
+            while True:
 
+                action = brain.predict_next_action(state, steps, env)
+                obs, reward, terminated, truncated, _ = env.step(action)
 
-            if terminated or truncated:
-                obs, info = env.reset()
+                done = terminated or truncated
 
+                next_state = frame.step(obs)
+
+                reward = np.clip(reward,-1,1)
+                brain.buffer.push(state, action, reward, next_state, float(done))
+                #replay
+                state = next_state
+                total_reward += reward
+                steps += 1 
+
+                loss = brain.train()
+                if loss == None : 
+                    loss = 0
+
+                if done:
+                    break
+            ep_time = time.time() - ep
+            episode_time.append(ep_time)
+            eta = np.mean(episode_time[-100:]) * (config.EPISODES - episode - 1)
+            print(f"Episode {episode} | Steps {steps} | Reward {total_reward:.1f} | Loss {loss:.5f} | Episode time {format_time(ep_time)} | Total time {format_time(time.time() - start_time)} | ETA {format_time(eta)}")
+            if episode % 10 == 0 and episode != 0: 
+                brain.save_checkpoint(episode, steps)
+            if episode % 100 == 0 and episode != 0: 
+                brain.save()
     finally:
+        brain.save()
         env.close()
 
 
