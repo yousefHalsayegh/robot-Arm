@@ -36,7 +36,7 @@ class Brain():
         plt.show()
 
     def train(self):
-       draw = False
+
        if len(self.buffer) < config.WARMUP:
            return None
        
@@ -58,22 +58,23 @@ class Brain():
        loss.backward()
        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
        self.optimiser.step()
-       if draw : 
-        self.losses.append(loss.item())
-        self.line.set_xdata(range(len(self.losses)))
-        self.line.set_ydata(self.losses)
-        self.ax.relim()
-        self.ax.autoscale_view()
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
-
+       self.soft_update()
        return loss.item()
+    
+    def soft_update(self):
+        for target_param, policy_param in zip(
+            self.test.parameters(),
+            self.policy.parameters()
+        ):
+            target_param.data.copy_(
+                config.TAU * policy_param.data + 
+                (1.0 - config.TAU) * target_param.data
+            )
 
     def predict_next_action(self, state, steps, env):
         eps = config.EPS_END + (config.EPS_START - config.EPS_END) * max(0, (config.EPS_DECAY - steps) / config.EPS_DECAY)
 
-        if steps % config.TARGET_UPDATE == 0:
-                    self.test.load_state_dict(self.policy.state_dict())
+    
         if random() < eps:
             return env.action_space.sample()
 
@@ -146,3 +147,4 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+    

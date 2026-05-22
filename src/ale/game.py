@@ -9,6 +9,8 @@ import ale_py
 import cv2
 from collections import deque
 import os
+import matplotlib.pyplot as plt
+import torch
 
 from brain import Brain
 import config
@@ -46,6 +48,19 @@ def format_time(seconds):
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+def ball_position(obs):
+
+    court =obs[14:76, 16:79]
+    player = obs[14:76, 70:79]
+    ball_pixels = np.argwhere((court > 0.7) & (court < 0.9))
+
+    ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
+
+    paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
+
+    paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
+
+    return ball_y, paddle_y
 
 def main():
     env = gym.make("ALE/Pong-v5", frameskip=4)
@@ -55,7 +70,7 @@ def main():
     steps = 0
     start_time = time.time()
     episode_time = []
-    path = "checkpoint/brain1030.pth"
+    path = "checkpoint/brain700.pth"
     if os.path.exists(path):
         steps, start = brain.load_checkpoint(path)
         print("loading... ", path )
@@ -70,17 +85,45 @@ def main():
             state = frame.reset(obs)
             total_reward = 0
             ep = time.time()
+            
+            goal_reward = 0
+            tracking_reward = 0 
+            ball_y = 0 
+            paddle_y = 0
 
             while True:
 
                 action = brain.predict_next_action(state, steps, env)
-                obs, reward, terminated, truncated, _ = env.step(action)
-
+                obs, raw_reward, terminated, truncated, _ = env.step(action)
+                reward = 0
+                
                 done = terminated or truncated
 
                 next_state = frame.step(obs)
 
-                reward = np.clip(reward,-1,1)
+                new_ball_y, new_paddle_y = ball_position(next_state[-1])
+                
+
+                if raw_reward != 0:
+                    goal = np.sign(raw_reward) * config.GOAL_REWARD
+                    reward += goal
+                    goal_reward += goal
+                
+                if new_ball_y is not None and new_paddle_y is not None:
+                    distance = abs(new_ball_y - new_paddle_y)
+
+                    track = config.DISTANCE_REWARD * (1-distance / 56.0)
+                    reward += track
+                    tracking_reward += track
+
+                    ball_down = new_ball_y > ball_y
+                    paddle_down = new_paddle_y > paddle_y
+
+                    if ball_down == paddle_down:
+                        reward += config.MOVING_REWARD
+                        tracking_reward += config.MOVING_REWARD
+
+
                 brain.buffer.push(state, action, reward, next_state, float(done))
                 #replay
                 state = next_state
@@ -96,11 +139,14 @@ def main():
             ep_time = time.time() - ep
             episode_time.append(ep_time)
             eta = np.mean(episode_time[-100:]) * (config.EPISODES - episode - 1)
-            print(f"Episode {episode} | Steps {steps} | Reward {total_reward:.1f} | Loss {loss:.5f} | Episode time {format_time(ep_time)} | Total time {format_time(time.time() - start_time)} | ETA {format_time(eta)}")
-            if episode % 10 == 0 and episode != 0: 
+            print(f"Episode {episode} | Steps {steps} | Total Reward {total_reward:.1f} | Tracking Reward {tracking_reward:.1f} |  Goal Reward {goal_reward:.1f} | Loss {loss:.5f}")
+            print(f"Episode time {format_time(ep_time)} | Total time {format_time(time.time() - start_time)} | ETA {format_time(eta)}")
+        
+            if episode % config.MID_SAVE == 0 and episode != 0: 
                 brain.save_checkpoint(episode, steps)
-            if episode % 100 == 0 and episode != 0: 
+            if episode % config.FULL_SAVE == 0 and episode != 0: 
                 brain.save()
+
     finally:
         brain.save()
         env.close()
