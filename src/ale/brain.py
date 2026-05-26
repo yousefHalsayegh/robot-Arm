@@ -2,7 +2,6 @@
 the RL part
 """
 import numpy as np
-from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,9 +9,7 @@ from random import random, randint, sample
 from collections import namedtuple, deque
 
 import config
-plt.ion()
 Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])
-
 class Brain():
     def __init__(self):
         #the network aspect
@@ -24,16 +21,6 @@ class Brain():
         self.test.eval()
 
         self.buffer = ReplayBuffer()
-
-        #the loss graph
-        self.losses = []
-        self.fig, self.ax = plt.subplots(num="Loss Curve", clear=True)
-        self.ax.set_xlabel('Num Epochs')
-        self.ax.set_ylabel('Loss')
-        self.ax.set_title('Loss Curve')
-        self.ax.set_yscale('log')
-        self.line, = self.ax.plot([], [], linestyle='-', marker=None, color='blue')
-        plt.show()
 
     def train(self):
 

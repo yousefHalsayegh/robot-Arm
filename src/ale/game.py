@@ -9,7 +9,6 @@ import ale_py
 import cv2
 from collections import deque
 import os
-import matplotlib.pyplot as plt
 import torch
 
 from brain import Brain
@@ -88,8 +87,8 @@ def main():
             
             goal_reward = 0
             tracking_reward = 0 
-            ball_y = 0 
-            paddle_y = 0
+            prev_paddle_y = None
+
 
             while True:
 
@@ -109,19 +108,24 @@ def main():
                     reward += goal
                     goal_reward += goal
                 
-                if new_ball_y is not None and new_paddle_y is not None:
-                    distance = abs(new_ball_y - new_paddle_y)
+        
+                if new_ball_y is not None and new_paddle_y is not None and prev_paddle_y is not None:
+                    new_distance = abs(new_ball_y - new_paddle_y)
+                    prev_distance = abs(new_ball_y - prev_paddle_y)
 
-                    track = config.DISTANCE_REWARD * (1-distance / 56.0)
-                    reward += track
-                    tracking_reward += track
+                    if new_distance < prev_distance:
+                        track = config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                        reward += track
+                        tracking_reward += track
+                    elif new_distance > config.THRESHOLD * config.CROP and new_distance >= prev_distance:
+                        reward -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                        tracking_reward -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                    
+                    center = config.PENALTIY_CENTER * ((abs(new_paddle_y - config.CENTER_Y))/config.CENTER_Y)
+                    reward -= center
+                    tracking_reward -= center
 
-                    ball_down = new_ball_y > ball_y
-                    paddle_down = new_paddle_y > paddle_y
-
-                    if ball_down == paddle_down:
-                        reward += config.MOVING_REWARD
-                        tracking_reward += config.MOVING_REWARD
+                prev_paddle_y = new_paddle_y
 
 
                 brain.buffer.push(state, action, reward, next_state, float(done))
@@ -139,7 +143,7 @@ def main():
             ep_time = time.time() - ep
             episode_time.append(ep_time)
             eta = np.mean(episode_time[-100:]) * (config.EPISODES - episode - 1)
-            print(f"Episode {episode} | Steps {steps} | Total Reward {total_reward:.1f} | Tracking Reward {tracking_reward:.1f} |  Goal Reward {goal_reward:.1f} | Loss {loss:.5f}")
+            print(f"Episode {episode} | Steps {steps} | Total Reward {total_reward:.1f} | Tracking Reward {tracking_reward:.1f} |  Goal Reward {goal_reward:.1f} (Actual {(goal_reward/config.GOAL_REWARD):.1f})| Loss {loss:.5f}")
             print(f"Episode time {format_time(ep_time)} | Total time {format_time(time.time() - start_time)} | ETA {format_time(eta)}")
         
             if episode % config.MID_SAVE == 0 and episode != 0: 
