@@ -8,6 +8,11 @@ WARMUP = 1000
 GAMMA = 0.99
 TAU = 0.005
 
+#lerobot bit
+ACTION_PER_CHUNK = 50
+CHUNK_SIZE = 0.5
+AGGREGATE = "weighted_average"
+POLICY = "/home/yousef/Documents/lerobot/outputs/train/smolvla_fighter_V1.64/checkpoints/050000/pretrained_model/"
 
 #game stuff
 EPISODES = 5000

@@ -1,5 +1,5 @@
 """
-the ALE part
+the ALE part training RL
 """
 
 import time
@@ -69,7 +69,7 @@ def main():
     steps = 0
     start_time = time.time()
     episode_time = []
-    path = "checkpoint/brain700.pth"
+    path = "checkpoint/brain1300.pth"
     if os.path.exists(path):
         steps, start = brain.load_checkpoint(path)
         print("loading... ", path )
