@@ -5,7 +5,7 @@ the lerobot part
 import config
 import inputs
 import random
-
+import time
 
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.async_inference.configs import RobotClientConfig
@@ -14,8 +14,8 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 
 CONTROLLER = {
     # D-pad vertical → paddle movement
-    ('ABS_HAT0Y', -1): [2, "up to down"],   # up   → RIGHT (paddle up)
-    ('ABS_HAT0Y',  1): [3, "down to up"],   # down → LEFT  (paddle down)
+    ('ABS_HAT0Y', -1): 2,   # up   → RIGHT (paddle up)
+    ('ABS_HAT0Y',  1): 3,   # down → LEFT  (paddle down)
     ('ABS_HAT0Y',  0): 0,   # released → NOOP
 
     # D-pad horizontal (not used in Pong but mapped anyway)
@@ -67,6 +67,7 @@ class Robot():
         self.client = RobotClient(cf)
         self.action = 1
         self.task = "up"
+        self.show = False
 
     def controller(self):
         while True:
@@ -80,27 +81,37 @@ class Robot():
                         continue
 
                     key = (e.code, e.state)
-                    act, task = CONTROLLER.get(key)
+                    act = CONTROLLER.get(key)
 
                     self.action = act
-                    self.task = task
 
             except Exception:
                 pass
 
 
     def send(self):
-
+        self.client.start_barrier.wait()
         while True:
-
+            control_loop_start = time.perf_counter()
             try:
-                self.client.control_loop(self.task)
+                if self.client.actions_available():
+                    self.client.control_loop_action()
+                
+                if self.client._ready_to_send_observation():
+                    self.client.control_loop_observation(self.task)
+
+
+                if self.show:
+                    print("current task ", self.task)
+                    self.show = False
+                time.sleep(max(0, (1/10) - (time.perf_counter() - control_loop_start)))
             except Exception:
                 pass
 
 
     def update_task(self, new_task):
         if self.task != new_task:
+            self.show = True
             self.task = new_task
 
             with self.client.action_queue_lock:
