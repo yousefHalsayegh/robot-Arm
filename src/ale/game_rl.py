@@ -68,7 +68,7 @@ def main():
     steps = 0
     start_time = time.time()
     episode_time = []
-    path = "checkpoint/brain4100.pth"
+    path = "checkpoint/brain4800.pth"
     if os.path.exists(path):
         steps, start = brain.load_checkpoint(path)
         print("loading... ", path )

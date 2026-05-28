@@ -9,10 +9,12 @@ GAMMA = 0.99
 TAU = 0.005
 
 #lerobot bit
-ACTION_PER_CHUNK = 50
-CHUNK_SIZE = 0.5
+ACTION_PER_CHUNK = 25
+CHUNK_SIZE = 0.25
 AGGREGATE = "weighted_average"
-POLICY = "/home/yousef/Documents/lerobot/outputs/train/smolvla_fighter_V1.66/checkpoints/040000/pretrained_model/"
+POLICY = "/home/yousef/Documents/robot-Arm/outputs/train/smolvla_fighter_V1.66/checkpoints/040000/pretrained_model"
+LENGTH = 25
+STEPS = 10
 
 #game stuff
 EPISODES = 5000
@@ -21,7 +23,7 @@ DISTANCE_REWARD = 0.01
 PENALTIY_MOVE = 0.5
 PENALTIY_CENTER = 0.001
 MID_SAVE = 100
-FULL_SAVE = 1000
+FULL_SAVE = 5000
 CROP = 68
 THRESHOLD = 0.15
 CENTER_Y = CROP / 2

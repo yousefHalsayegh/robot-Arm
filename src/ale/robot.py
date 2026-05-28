@@ -4,8 +4,8 @@ the lerobot part
 """
 import config
 import inputs
-import random
 import time
+import random 
 
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.async_inference.configs import RobotClientConfig
@@ -38,9 +38,9 @@ CONTROLLER = {
 
 
 class Robot():
-    def __init__(self):
+    def __init__(self, init_action_per_chunk=config.ACTION_PER_CHUNK, init_chunk_size_threshold = config.CHUNK_SIZE, init_aggregate_fn_name = config.AGGREGATE):
 
-        cf = RobotClientConfig(
+        rcf = RobotClientConfig(
             policy_type="smolvla",
             pretrained_name_or_path=config.POLICY,
             robot=SOFollowerRobotConfig(
@@ -56,18 +56,20 @@ class Robot():
                     )
                 }
             ),
-            actions_per_chunk=config.ACTION_PER_CHUNK ,
+            actions_per_chunk=init_action_per_chunk ,
             task="up",
             policy_device="cuda",
             client_device="cuda",
-            chunk_size_threshold= config.CHUNK_SIZE,
-            aggregate_fn_name= config.AGGREGATE
+            chunk_size_threshold= init_chunk_size_threshold,
+            aggregate_fn_name= init_aggregate_fn_name
         )
 
-        self.client = RobotClient(cf)
+        self.client = RobotClient(rcf)
         self.action = 1
-        self.task = "up"
-        self.show = False
+        self.task = random.choice(["up", "down"])
+        home_obs = self.client.robot.get_observation()
+        self.home_position = {k: v for k, v in home_obs.items() if '.pos' in k}
+        self.reseting = False
 
     def controller(self):
         while True:
@@ -94,16 +96,16 @@ class Robot():
         while True:
             control_loop_start = time.perf_counter()
             try:
+                if self.reseting:
+                    time.sleep(0.05)
+                    continue
+
                 if self.client.actions_available():
                     self.client.control_loop_action()
                 
                 if self.client._ready_to_send_observation():
                     self.client.control_loop_observation(self.task)
 
-
-                if self.show:
-                    print("current task ", self.task)
-                    self.show = False
                 time.sleep(max(0, (1/10) - (time.perf_counter() - control_loop_start)))
             except Exception:
                 pass
@@ -111,10 +113,46 @@ class Robot():
 
     def update_task(self, new_task):
         if self.task != new_task:
-            self.show = True
             self.task = new_task
 
-            with self.client.action_queue_lock:
-                self.client.action_queue.queue.clear()
+    def flush(self):
+        with self.client.action_queue_lock:
+            self.client.action_queue.queue.clear()
 
-            self.client.must_go.set()
+        self.client.must_go.set()
+
+    def reset(self):
+        self.reseting = True
+
+        time.sleep(0.1)
+        self.flush()
+        TOLERANCE = 5.0
+        TIMEOUT   = 10.0
+        GRIPPER = 35.0
+        self.task = random.choice(["up", "down"])
+
+        obs     = self.client.robot.get_observation()
+        current = {k: obs[k] for k in self.home_position if k in obs}
+        current["gripper.pos"] = GRIPPER
+        self.client.robot.send_action(current)
+        time.sleep(1.0)
+
+        obs     = self.client.robot.get_observation()
+        home_cmd = {**self.home_position, "gripper.pos": GRIPPER}
+
+        t_start = time.perf_counter()
+        while (time.perf_counter() - t_start) < TIMEOUT:
+
+            self.client.robot.send_action(home_cmd)
+            obs          = self.client.robot.get_observation()
+            error   = max(abs(obs.get(k, 0) - self.home_position[k]) for k in self.home_position)
+            if error < TOLERANCE:
+                self.flush()
+                self.reseting = False
+                return 
+            time.sleep(1)
+
+
+        self.flush()
+        self.reseting = False
+        print("Reset timeout — continuing anyway")
