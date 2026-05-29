@@ -129,7 +129,11 @@ class Robot():
         TOLERANCE = 5.0
         TIMEOUT   = 10.0
         GRIPPER = 35.0
-        self.task = random.choice(["up", "down"])
+        
+        if self.task.split(" ")[0] == "up":
+            self.task = "down"
+        else:
+            self.task = "up"
 
         obs     = self.client.robot.get_observation()
         current = {k: obs[k] for k in self.home_position if k in obs}

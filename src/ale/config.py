@@ -15,6 +15,7 @@ AGGREGATE = "weighted_average"
 POLICY = "/home/yousef/Documents/robot-Arm/outputs/train/smolvla_fighter_V1.66/checkpoints/040000/pretrained_model"
 LENGTH = 25
 STEPS = 10
+TIMEOUT = 25
 
 #game stuff
 EPISODES = 5000
