@@ -61,14 +61,14 @@ def ball_position(obs):
     return ball_y, paddle_y
 
 def main():
-    env = gym.make("ALE/Pong-v5", frameskip=4)
+    env = gym.make("ALE/Pong-v5", frameskip=4, render_mode = "human")
     env.reset(seed=42)
     frame = Frames()
     brain = Brain()
     steps = 0
     start_time = time.time()
     episode_time = []
-    path = "checkpoint/brain4800.pth"
+    path = "checkpoint/brain4900.pth"
     if os.path.exists(path):
         steps, start = brain.load_checkpoint(path)
         print("loading... ", path )

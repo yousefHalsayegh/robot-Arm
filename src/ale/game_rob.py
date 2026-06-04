@@ -11,7 +11,21 @@ import config
 import random
 from robot import Robot
 
+def finetune_list():
+    f = {}
+    chunk = [25, 50, 75, 100]
+    threshold = [0.25, 0.50, 0.75, 1.0]
+    aggregation = ["weighted_average", "latest_only", "average", "conservative"]
+    for c in chunk:
+        for t in threshold:
+            f[(c,t)] = {
+                "down to up" : [],
+                "up to down" : [],
+                "up": [],
+                "down" :[]
+            }
 
+    return f 
 
 gym.register_envs(ale_py)
 
@@ -19,22 +33,12 @@ def remap_keys(mapping):
     return [{'key':k, 'value': v} for k, v in mapping.iteritems()]
 
 def main():
-    chunk = [25, 50, 75, 100]
-    threshold = [0.25, 0.50, 0.75, 1.0]
-    aggregation = ["weighted_average", "latest_only", "average", "conservative"]
-    finetune = {}
 
-
-    for c in chunk:
-         for t in threshold:
-                finetune[(c,t)] = {
-                    "down to up" : [],
-                    "up to down" : [],
-                    "up": [],
-                    "down" :[]
-                }
-
+    with open("finetune.json", "r") as f :
+        temp = json.load(f)
+    finetune = {(float(keys[1:4]), float(keys[-4:-1])):values for keys, values in temp.items()}
     keys = list(finetune.keys())
+    print(keys)
     random.shuffle(keys)
 
     env = gym.make("ALE/Pong-v5", frameskip=4, render_mode="human")
@@ -51,9 +55,13 @@ def main():
 
     controller = threading.Thread(target=robot.send, daemon=True)
     controller.start()
-
+    did = set()
     try:
         for k in keys:
+            if len(finetune[k]["up"]) > 0 or len(finetune[k]["down"]) > 0 or len(finetune[k]["up to down"]) > 0 or len(finetune[k]["down to up"]) > 0:
+                print(k, " already has information moving to the next one")
+                continue
+            print("doing currently ", k)
             robot.client.action_chunk_size = k[0]
             robot.client._chunk_size_threshold = k[1]
             current = [0, 0, 0 , 0]
@@ -116,12 +124,19 @@ def main():
                     print("counting since the change is big")
                 if len(finetune[k]["up to down"]) >= config.LENGTH and len(finetune[k]["down to up"]) >= config.LENGTH:
                     print("reached the limit")
+                    with open("finetune.json", "w") as f :
+                        json.dump({str(key): value for key, value in finetune.items()}, f, indent=2)
                     robot.reset()
                     break 
                 if count > config.STEPS:
                     print("nothing changed for too long")
+                    with open("finetune.json", "w") as f :
+                        json.dump({str(key): value for key, value in finetune.items()}, f, indent=2)
                     robot.reset()
                     break
+            if k not in did:
+                did.add(k)
+                print("currently done are: ", did)
 
     except KeyboardInterrupt:
         print("closing")
