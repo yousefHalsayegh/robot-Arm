@@ -6,37 +6,12 @@ import time
 import numpy as np
 import gymnasium as gym
 import ale_py
-import cv2
-from collections import deque
+
 import os
 
-from brain import Brain
+from brain import Brain, Frames
 import config
 
-class Frames():
-    def __init__(self, n=4):
-        self.frames = deque(maxlen=n)
-        self.n = n
-
-    def preprocess(self, img):
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        img = cv2.resize(img, (84,84))
-        img = img/255.0
-
-        return img.astype(np.float32)
-    
-    def reset(self, img):
-        proc = self.preprocess(img)
-        for _ in range(self.n):
-            self.frames.append(proc)
-        return self._get_state()
-    
-    def step(self, img):
-        self.frames.append(self.preprocess(img))
-        return self._get_state()
-    
-    def _get_state(self):
-        return np.stack(self.frames, axis=0)
 
 gym.register_envs(ale_py)
 
