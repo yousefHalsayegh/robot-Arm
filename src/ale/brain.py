@@ -49,13 +49,6 @@ class Brain():
 
         self.buffer = ReplayBuffer()
 
-    @classmethod
-    def for_rollout(cls) -> "Brain":
-        obj = cls.__new__(cls)
-        obj.policy = Network().to("cuda")
-        obj.policy.load_state_dict(torch.load("checkpoint/brain4900.pth", map_location="cuda")['policy'])
-        obj.policy.eval()
-        return obj
     
     def train(self):
 
@@ -96,7 +89,6 @@ class Brain():
     def predict_next_action(self, state, steps, env):
         eps = config.EPS_END + (config.EPS_START - config.EPS_END) * max(0, (config.EPS_DECAY - steps) / config.EPS_DECAY)
 
-    
         if random() < eps:
             return env.action_space.sample()
 
@@ -104,16 +96,20 @@ class Brain():
             state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
             return self.policy(state_next).argmax(dim=1).item()
 
-    def save_checkpoint(self, episode, steps):
+    def save_checkpoint(self, episode, steps, total_reward, tracking_reward, goal_reward, loss, path="checkpoint"):
 
         torch.save(
             {
                 "steps" : steps,
                 "episode" : episode, 
+                "loss" : loss,
+                "total reward": total_reward, 
+                "tracking reward": tracking_reward,
+                "goal reward" : goal_reward,
                 "policy" : self.policy.state_dict(),
                 "test" : self.test.state_dict(),
                 "optimizer" : self.optimiser.state_dict()
-            }, f"checkpoint/brain{episode}.pth"
+            }, f"{path}/brain{episode}.pth"
         )
     def save(self):
         torch.save(self.policy.state_dict(), "brain.pth")
@@ -131,6 +127,19 @@ class Brain():
         with torch.no_grad():
             state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
             return self.policy(state_next).argmax(dim=1).item()
+        
+    def ball_position(self,obs):
+
+        court =obs[14:76, 16:79]
+        player = obs[14:76, 70:79]
+        ball_pixels = np.argwhere((court > 0.7) & (court < 0.9))
+
+        ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
+
+        paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
+
+        paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
+        return ball_y, paddle_y
         
 class Network(nn.Module):
 

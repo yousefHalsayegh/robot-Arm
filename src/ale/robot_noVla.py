@@ -2,11 +2,10 @@
 """
 the lerobot part
 """
-import config
 import inputs
 import time
-import random 
 import threading
+import config
 
 from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
 from lerobot.teleoperators.so_leader.config_so_leader import SOLeaderTeleopConfig
@@ -95,59 +94,25 @@ class Robot():
             id="fighter_l"
         ))
         try:
-            print("taking the postion for home")
             tp.connect()
-            teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
-            teleop_loop(
-                teleop=tp, 
-                robot=self.rb,
-                fps=30, 
-                teleop_action_processor=teleop_action_processor, 
-                robot_action_processor=robot_action_processor, 
-                robot_observation_processor=robot_observation_processor,
-                duration = 10)
-            time.sleep(2.0)
-            obs = self.rb.get_observation()
-            self.positions['home'] = {k:v for k,v in obs.items() if '.pos' in k}
+            for i in ['home', 'neutral', 'up', 'down']:
+                if not self.positions[i]:
+                    print("taking the postion for ", i)
+                    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+                    teleop_loop(
+                        teleop=tp, 
+                        robot=self.rb,
+                        fps=30, 
+                        teleop_action_processor=teleop_action_processor, 
+                        robot_action_processor=robot_action_processor, 
+                        robot_observation_processor=robot_observation_processor,
+                        duration = 10)
+                    time.sleep(2.0)
+                    obs = self.rb.get_observation()
+                    self.positions[i] = {k:v for k,v in obs.items() if '.pos' in k}
+                else:
+                    print("already have position for ", i)
 
-            print("taking the postion for neutral")
-            teleop_loop(
-                teleop=tp, 
-                robot=self.rb,
-                fps=30, 
-                teleop_action_processor=teleop_action_processor, 
-                robot_action_processor=robot_action_processor, 
-                robot_observation_processor=robot_observation_processor,
-                duration = 10)
-            time.sleep(2.0)
-            obs = self.rb.get_observation()
-            self.positions['neutral'] = {k:v for k,v in obs.items() if '.pos' in k}
-
-            print("taking the postion for up")
-            teleop_loop(
-                teleop=tp, 
-                robot=self.rb,
-                fps=30, 
-                teleop_action_processor=teleop_action_processor, 
-                robot_action_processor=robot_action_processor, 
-                robot_observation_processor=robot_observation_processor,
-                duration = 10)
-            time.sleep(2.0)
-            obs = self.rb.get_observation()
-            self.positions['up'] = {k:v for k,v in obs.items() if '.pos' in k}
-
-            print("taking the postion for down")
-            teleop_loop(
-                teleop=tp, 
-                robot=self.rb,
-                fps=30, 
-                teleop_action_processor=teleop_action_processor, 
-                robot_action_processor=robot_action_processor, 
-                robot_observation_processor=robot_observation_processor,
-                duration = 10)
-            time.sleep(2.0)
-            obs = self.rb.get_observation()
-            self.positions['down'] = {k:v for k,v in obs.items() if '.pos' in k}
             
         finally:
             tp.disconnect()
@@ -155,41 +120,46 @@ class Robot():
     def act(self):
         while True:
             if self.reseting:
+                time.sleep(0.1)
                 continue
-            print("acting on ", self.task)
             self.rb.send_action(self.positions[self.task] )
 
-            time.sleep(1 / 10)
+            time.sleep(config.SLEEP)
 
 
 
     def reset(self):
         self.reseting = True
+        time.sleep(config.SLEEP + 0.1)
         home = self.positions['home']
         start = time.perf_counter()
-
+        confirmed = 0 
         while(time.perf_counter() - start) < 10:
             self.rb.send_action(home)
 
             obs = self.rb.get_observation()
             error = max(abs(obs.get(k,0) - home[k]) for k in home)
 
-            if error < 5:
-                self.reseting = False
-                return
+            if error < 3:
+                confirmed += 1
+                if confirmed >= 5:
+                    break
             
-            time.sleep(1/10)
+            time.sleep(config.SLEEP)
+
         neutral = self.positions['neutral']
+        start = time.perf_counter()
         while(time.perf_counter() - start) < 10:
             self.rb.send_action(neutral)
 
             obs = self.rb.get_observation()
             error = max(abs(obs.get(k,0) - neutral[k]) for k in neutral)
 
-            if error < 5:
-                self.reseting = False
-                return
+            if error < 3:
+                confirmed += 1
+                if confirmed >= 5:
+                    break
             
-            time.sleep(1/10)
+            time.sleep(config.SLEEP)
 
         self.reseting = False

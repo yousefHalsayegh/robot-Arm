@@ -21,19 +21,7 @@ def format_time(seconds):
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-def ball_position(obs):
 
-    court =obs[14:76, 16:79]
-    player = obs[14:76, 70:79]
-    ball_pixels = np.argwhere((court > 0.7) & (court < 0.9))
-
-    ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
-
-    paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
-
-    paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
-
-    return ball_y, paddle_y
 
 def main():
     env = gym.make("ALE/Pong-v5", frameskip=4, render_mode = "human")
@@ -74,7 +62,7 @@ def main():
 
                 next_state = frame.step(obs)
 
-                new_ball_y, new_paddle_y = ball_position(next_state[-1])
+                new_ball_y, new_paddle_y = brain.ball_position(next_state[-1])
                 
 
                 if raw_reward != 0:
