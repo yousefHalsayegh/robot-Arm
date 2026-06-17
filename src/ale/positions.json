@@ -1,34 +1,34 @@
 {
   "home": {
-    "shoulder_pan.pos": -8.087912087912088,
-    "shoulder_lift.pos": 4.043956043956044,
-    "elbow_flex.pos": 64.7032967032967,
-    "wrist_flex.pos": -70.65934065934066,
-    "wrist_roll.pos": -93.14285714285714,
-    "gripper.pos": 49.677835051546396
+    "shoulder_pan.pos": -5.714285714285714,
+    "shoulder_lift.pos": 10.54945054945055,
+    "elbow_flex.pos": 53.53846153846154,
+    "wrist_flex.pos": -65.52747252747253,
+    "wrist_roll.pos": -90.32967032967034,
+    "gripper.pos": 51.61082474226804
   },
   "neutral": {
-    "shoulder_pan.pos": -7.824175824175824,
-    "shoulder_lift.pos": 5.802197802197802,
-    "elbow_flex.pos": 64.7032967032967,
-    "wrist_flex.pos": -70.18681318681318,
-    "wrist_roll.pos": -92.96703296703296,
-    "gripper.pos": 16.716494845360824
+    "shoulder_pan.pos": -5.450549450549451,
+    "shoulder_lift.pos": 12.131868131868131,
+    "elbow_flex.pos": 52.48351648351648,
+    "wrist_flex.pos": -65.52747252747253,
+    "wrist_roll.pos": -90.24175824175825,
+    "gripper.pos": 20.262886597938145
   },
   "up": {
-    "shoulder_pan.pos": -7.736263736263736,
-    "shoulder_lift.pos": 8.087912087912088,
-    "elbow_flex.pos": 60.65934065934066,
-    "wrist_flex.pos": -70.0989010989011,
-    "wrist_roll.pos": -92.87912087912088,
-    "gripper.pos": 16.716494845360824
+    "shoulder_pan.pos": -5.362637362637362,
+    "shoulder_lift.pos": 15.714285714285714,
+    "elbow_flex.pos": 40.35164835164835,
+    "wrist_flex.pos": -65.52747252747253,
+    "wrist_roll.pos": -90.15384615384616,
+    "gripper.pos": 20.262886597938145
   },
   "down": {
-    "shoulder_pan.pos": -7.736263736263736,
-    "shoulder_lift.pos": -0.17582417582417584,
-    "elbow_flex.pos": 69.71428571428571,
-    "wrist_flex.pos": -70.01098901098901,
-    "wrist_roll.pos": -93.14285714285714,
-    "gripper.pos": 16.716494845360824
+    "shoulder_pan.pos": -5.8901098901098905,
+    "shoulder_lift.pos": 5.714285714285714,
+    "elbow_flex.pos": 57.494505494505496,
+    "wrist_flex.pos": -65.17582417582418,
+    "wrist_roll.pos": -90.41758241758242,
+    "gripper.pos": 20.262886597938145
   }
 }

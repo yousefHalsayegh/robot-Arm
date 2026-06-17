@@ -7,34 +7,8 @@ import torch.nn as nn
 import torch.optim as optim
 from random import random, randint, sample
 from collections import namedtuple, deque
-import cv2
-
 import config
 Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])
-class Frames():
-    def __init__(self, n=4):
-        self.frames = deque(maxlen=n)
-        self.n = n
-
-    def preprocess(self, img):
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        img = cv2.resize(img, (84,84))
-        img = img/255.0
-
-        return img.astype(np.float32)
-    
-    def reset(self, img):
-        proc = self.preprocess(img)
-        for _ in range(self.n):
-            self.frames.append(proc)
-        return self._get_state()
-    
-    def step(self, img):
-        self.frames.append(self.preprocess(img))
-        return self._get_state()
-    
-    def _get_state(self):
-        return np.stack(self.frames, axis=0)
 
 
 class Brain():
@@ -93,8 +67,8 @@ class Brain():
             return env.action_space.sample()
 
         with torch.no_grad():
-            state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
-            return self.policy(state_next).argmax(dim=1).item()
+            state_next = torch.FloatTensor(state).to("cuda")
+            return self.policy(state_next).argmax(dim=1).cpu().numpy().astype(np.int64)
 
     def save_checkpoint(self, episode, steps, total_reward, tracking_reward, goal_reward, loss, path="checkpoint"):
 

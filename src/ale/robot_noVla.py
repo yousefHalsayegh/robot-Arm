@@ -16,29 +16,12 @@ from lerobot.scripts.lerobot_teleoperate import teleop_loop
 from lerobot.processor import make_default_processors
 
 CONTROLLER = {
-    # D-pad vertical → paddle movement
-    ('ABS_HAT0Y', -1): 2,   # up   → RIGHT (paddle up)
-    ('ABS_HAT0Y',  1): 3,   # down → LEFT  (paddle down)
-    ('ABS_HAT0Y',  0): 0,   # released → NOOP
+    # Keep in mind this is on the X/Y trgger not DP and the values are for Pong
+    ('ABS_Y', 0): 2,   # up 
+    ('ABS_Y',  255): 3,   # down
+    ('ABS_Y',  128): 0,   # Neutral
 
-    # D-pad horizontal (not used in Pong but mapped anyway)
-    ('ABS_HAT0X', -1): 3,   # left
-    ('ABS_HAT0X',  1): 2,   # right
-    ('ABS_HAT0X',  0): 0,
-
-    # Face buttons
-    ('BTN_SOUTH', 1): 1,    # A → FIRE (serve)
-    ('BTN_EAST',  1): 1,    # B → FIRE
-    ('BTN_NORTH', 1): 1,    # Y → FIRE
-    ('BTN_WEST',  1): 0,    # X → NOOP
-
-    # Bumpers
-    ('BTN_TR',  1): 2,      # RB → paddle up
-    ('BTN_TL',  1): 3,      # LB → paddle down
-    ('BTN_TR2', 1): 1,      # RT digital → FIRE
-    ('BTN_TL2', 1): 1,      # LT digital → FIRE
 }
-
 
 class Robot():
     def __init__(self):
@@ -68,6 +51,8 @@ class Robot():
         self.serial_lock = threading.Lock()
         self.task = "neutral"
         self.action = 0
+        self.prev = 0
+        self.actions = {'all' : 0, 'neutral': 0, 'down': 0, 'up':0}
 
     def controller(self):
         while True:
@@ -84,6 +69,16 @@ class Robot():
                     act = CONTROLLER.get(key)
 
                     self.action = act
+                    if self.prev != self.action:
+                        self.prev = self.action
+                        if act == 2:
+                            self.actions['up'] += 1
+                        elif act == 3:
+                            self.actions['down'] += 1
+                        else:
+                            self.actions['neutral'] += 1
+                        self.actions['all'] += 1
+                            
 
             except Exception:
                 pass
@@ -127,8 +122,7 @@ class Robot():
             time.sleep(config.SLEEP)
 
 
-
-    def reset(self):
+    def inital(self):
         self.reseting = True
         time.sleep(config.SLEEP + 0.1)
         home = self.positions['home']
@@ -147,8 +141,14 @@ class Robot():
             
             time.sleep(config.SLEEP)
 
+        self.reseting = False
+
+    def reset(self):
+        self.reseting = True
+        time.sleep(config.SLEEP + 0.1)
         neutral = self.positions['neutral']
         start = time.perf_counter()
+        confirmed = 0 
         while(time.perf_counter() - start) < 10:
             self.rb.send_action(neutral)
 

@@ -35,7 +35,7 @@ def main():
     
     robot.start()
 
-    robot.reset()
+    robot.inital()
 
     brain = Brain()
     path = ""
@@ -67,27 +67,29 @@ def main():
             goal_reward = 0
             tracking_reward = 0 
             prev_paddle_y = None
-            prev_action = 0 
-            steps_since_change = 0
-            switch_penaltiy = 0
-            premature_switch = 0
-
+            action_lap = 0
+            actions = {"all": 0, "up" : 0, "down": 0, "neutral": 0}
+            robot.actions = {"all": 0, "up" : 0, "down": 0, "neutral": 0}
+            action = 0
+            prev_action = 0
             while True:
                 lap = time.time()
-                time_ep = steps_since_change * config.SLEEP
 
-                action = brain.predict_next_action(state,steps, env)
-                if action == 2:
-                    robot.task = "up"
-                elif action == 3:
-                    robot.task = "down"
-                else:
-                    robot.task = "neutral"
-
-                if action != prev_action:
-                    steps_since_change = 0
-                else:
-                    steps_since_change += 1
+                if action_lap >= config.SLEEP:
+                    action = brain.predict_next_action(state,steps, env)
+                    if prev_action != action:
+                        prev_action = action
+                        if action == 2:
+                            robot.task = "up"
+                            actions['up'] += 1
+                        elif action == 3:
+                            robot.task = "down"
+                            actions['down'] += 1
+                        else:
+                            robot.task = "neutral"
+                            actions['neutral'] += 1
+                        action_lap = 0
+                        actions["all"] += 1
 
                 obs, raw_reward, terminated, truncated, _ = env.step(robot.action)
                 reward = 0
@@ -121,19 +123,6 @@ def main():
 
                 prev_paddle_y = new_paddle_y
 
-                if action != prev_action:
-                    penalty = -config.PENALITY_SWITCH
-                    switch_penaltiy += penalty
-                    reward += penalty
-
-                if action != prev_action and time_ep < config.SLEEP:
-                    fraction = 1 - min(time_ep / config.SLEEP, 1.0)
-                    penalty = fraction * -config.PREMATURE_SWTICH
-                    premature_switch += penalty
-                    reward += penalty
-
-                prev_action = action
-
                 brain.buffer.push(state, action, reward, next_state, float(done))
                 state = next_state
                 total_reward += reward
@@ -144,17 +133,20 @@ def main():
                     loss = 0
 
                 if done:
-                    time.sleep(1)
                     robot.reset()
                     break
-                time.sleep(max(0, config.SLEEP- lap))
+
+                overall = max(0, config.SLOW- (time.time() - lap))
+                time.sleep(overall)
+                action_lap += overall
 
             ep_time = time.time() - ep
             episode_time.append(ep_time)
             eta = np.mean(episode_time[-100:]) * (config.EPISODES - episode - 1)
             print(f"Episode {episode} | Steps {steps} |  Loss {loss:.5f}")
             print(f"Total Reward {total_reward:.1f} | Tracking Reward {tracking_reward:.1f} |  Goal Reward {goal_reward:.1f} (Actual {(goal_reward/config.GOAL_REWARD):.1f})")
-            print(f"Swtiching Penaltiy {switch_penaltiy:.1f} |Premature Swtiching {premature_switch:.1f} ")
+            print(f"Total Actions per Episode {actions['all']:.1f}/{robot.actions['all']:.1f} | Up Actions per Episode {actions['up']:.1f}/{robot.actions['up']:.1f} ")
+            print(f"Neutral Actions per Episode {actions['neutral']:.1f}/{robot.actions['neutral']:.1f} | Down Actions per Episode {actions['down']:.1f}/{robot.actions['down']:.1f}")
             print(f"Episode time {format_time(ep_time)} | Total time {format_time(time.time() - start_time)} | ETA {format_time(eta)}")
         
             if episode % config.MID_SAVE == 0 and episode != 0: 
