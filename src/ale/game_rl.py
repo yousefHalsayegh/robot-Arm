@@ -107,7 +107,7 @@ def main():
             while episode < args.episode:
                 lap = time.time()
 
-                ready = action_lap >= args.execution
+                ready = np.ones(args.environment, dtype=bool) if not args.human_speed else action_lap >= args.execution
 
                 action = brain.predict_next_action(state,steps, env)
                 current_actions = np.where(ready, action, prev_action)
@@ -204,12 +204,10 @@ def main():
                         "episode/goal_reward": goal_reward[i],
                         "episode/tracking_reward": tracking_reward[i],
                         "episode/clipped_reward": clipped[i],
-                        "episode/episode_time": ep_time,
+                        "episode/action_all": actions[i]["all"],
                         "episode/actions_up": actions[i]["up"],
                         "episode/actions_down": actions[i]["down"],
                         "episode/actions_neutral": actions[i]["neutral"],
-                        "episode/action_ratio_up": actions[i]["up"]   / max(actions[i]["all"], 1),
-                        "episode/action_ratio_down": actions[i]["down"] / max(actions[i]["all"], 1),
                         "episode/episode": episode,
                     }, step=steps)
 
