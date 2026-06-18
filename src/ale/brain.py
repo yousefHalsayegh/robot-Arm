@@ -7,29 +7,35 @@ import torch.nn as nn
 import torch.optim as optim
 from random import random, randint, sample
 from collections import namedtuple, deque
-import config
 Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])
 
 
 class Brain():
-    def __init__(self):
+    def __init__(self, lr, wp, b, g, tau, ee, es, ed,c):
         #the network aspect
         self.policy = Network().to("cuda")
-        self.optimiser = optim.Adam(self.policy.parameters(), lr=config.LEARNING_RATE)
+        self.optimiser = optim.Adam(self.policy.parameters(), lr=lr)
         self.loss_fn = nn.MSELoss()
 
         self.test = Network().to("cuda")
         self.test.eval()
 
-        self.buffer = ReplayBuffer()
-
+        self.buffer = ReplayBuffer(c)
+        self.eps = 0
+        self.warmup = wp
+        self.batch = b
+        self.gamma = g
+        self.tau = tau
+        self.eps_end = ee
+        self.eps_start = es
+        self.eps_decay = ed
     
     def train(self):
 
-       if len(self.buffer) < config.WARMUP:
-           return None
+       if len(self.buffer) < self.warmup:
+           return 0, 0
        
-       batch = self.buffer.sample(config.BATCH)
+       batch = self.buffer.sample(self.batch)
        states = torch.FloatTensor(np.array([t.state      for t in batch])).to("cuda")
        actions = torch.LongTensor(np.array([t.action      for t in batch])).to("cuda")
        rewards = torch.FloatTensor(np.array([t.reward      for t in batch])).to("cuda")
@@ -39,7 +45,7 @@ class Brain():
        q_values = self.policy(states).gather(1, actions.unsqueeze(1)).squeeze(1)
        with torch.no_grad():
            next_q = self.test(next_states).max(1)[0]
-           targets = rewards +config.GAMMA * next_q * (1 - dones)
+           targets = rewards +self.gamma* next_q * (1 - dones)
 
 
        loss = self.loss_fn(q_values, targets)
@@ -48,7 +54,15 @@ class Brain():
        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
        self.optimiser.step()
        self.soft_update()
-       return loss.item()
+
+       grad_norm = sum(
+        p.grad.norm().item() ** 2
+        for p in self.policy.parameters()
+        if p.grad is not None
+        ) ** 0.5
+
+
+       return loss.item(), grad_norm
     
     def soft_update(self):
         for target_param, policy_param in zip(
@@ -56,37 +70,33 @@ class Brain():
             self.policy.parameters()
         ):
             target_param.data.copy_(
-                config.TAU * policy_param.data + 
-                (1.0 - config.TAU) * target_param.data
+                self.tau * policy_param.data + 
+                (1.0 - self.tau) * target_param.data
             )
 
     def predict_next_action(self, state, steps, env):
-        eps = config.EPS_END + (config.EPS_START - config.EPS_END) * max(0, (config.EPS_DECAY - steps) / config.EPS_DECAY)
+        self.eps = self.eps_end+ (self.eps_start - self.eps_end) * max(0, (self.eps_decay - steps) / self.eps_decay)
 
-        if random() < eps:
+        if random() < self.eps:
             return env.action_space.sample()
 
         with torch.no_grad():
             state_next = torch.FloatTensor(state).to("cuda")
             return self.policy(state_next).argmax(dim=1).cpu().numpy().astype(np.int64)
 
-    def save_checkpoint(self, episode, steps, total_reward, tracking_reward, goal_reward, loss, path="checkpoint"):
+    def save_checkpoint(self, episode, steps, path="checkpoint"):
 
         torch.save(
             {
                 "steps" : steps,
                 "episode" : episode, 
-                "loss" : loss,
-                "total reward": total_reward, 
-                "tracking reward": tracking_reward,
-                "goal reward" : goal_reward,
                 "policy" : self.policy.state_dict(),
                 "test" : self.test.state_dict(),
                 "optimizer" : self.optimiser.state_dict()
             }, f"{path}/brain{episode}.pth"
         )
-    def save(self):
-        torch.save(self.policy.state_dict(), "brain.pth")
+    def save(self, path):
+        torch.save(self.policy.state_dict(), f"{path}/brain.pth")
 
     def load_checkpoint(self,path):
         checkpoint = torch.load(path,  map_location="cuda")
@@ -114,7 +124,7 @@ class Brain():
 
         paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
         return ball_y, paddle_y
-        
+
 class Network(nn.Module):
 
     #TODO add the blocks methods so I can test out which structure is the best 
@@ -146,7 +156,7 @@ class Network(nn.Module):
 class ReplayBuffer:
 
     
-    def __init__(self, capacity=100_000):
+    def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
 
     def push(self, *args):
