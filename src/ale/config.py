@@ -20,7 +20,8 @@ POLICY = "/home/yousef/Documents/robot-Arm/outputs/train/smolvla_fighter_V1.66/c
 LENGTH = 25
 STEPS = 10
 TIMEOUT = 25
-EXECUTION = 0.3
+EXECUTION = 0
+SWITCH = False
 
 #game stuff
 EPISODES = 5000

@@ -81,7 +81,7 @@ class Robot():
                             
 
             except Exception:
-                pass
+                break
 
     def start(self):
         tp = make_teleoperator_from_config(SOLeaderTeleopConfig(
@@ -114,17 +114,20 @@ class Robot():
 
     def act(self):
         while True:
-            if self.reseting:
-                time.sleep(0.1)
-                continue
-            self.rb.send_action(self.positions[self.task] )
+            try:
+                if self.reseting:
+                    time.sleep(0.1)
+                    continue
+                self.rb.send_action(self.positions[self.task] )
 
-            time.sleep(config.SLEEP)
+                time.sleep(config.EXECUTION)
+            except Exception:
+                break
 
 
     def inital(self):
         self.reseting = True
-        time.sleep(config.SLEEP + 0.1)
+        time.sleep(config.EXECUTION + 0.1)
         home = self.positions['home']
         start = time.perf_counter()
         confirmed = 0 
@@ -139,13 +142,13 @@ class Robot():
                 if confirmed >= 5:
                     break
             
-            time.sleep(config.SLEEP)
+            time.sleep(config.EXECUTION)
 
         self.reseting = False
 
     def reset(self):
         self.reseting = True
-        time.sleep(config.SLEEP + 0.1)
+        time.sleep(config.EXECUTION + 0.1)
         neutral = self.positions['neutral']
         start = time.perf_counter()
         confirmed = 0 
@@ -160,6 +163,6 @@ class Robot():
                 if confirmed >= 5:
                     break
             
-            time.sleep(config.SLEEP)
+            time.sleep(config.EXECUTION)
 
         self.reseting = False

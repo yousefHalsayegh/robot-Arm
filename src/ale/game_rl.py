@@ -9,9 +9,12 @@ import numpy as np
 import config
 import time
 from brain import Brain
+from eyes import Eyes, Frames
 import argparse
 import wandb
 from tqdm import tqdm
+from random import random
+import pygame
 
 gym.register_envs(ale_py)
 
@@ -38,32 +41,8 @@ def env_init(seed, N):
         return env
     return _init
 
-def main():
-
-    parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
-    parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
-    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, required=True)
-    parser.add_argument("-ex", "--execution", help="The speed of the robot arm", type=float, default=config.EXECUTION)
-    parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
-    parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
-    parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
-    parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
-    parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
-    parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
-    parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
-    parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
-    parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
-    parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
-    parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
-    parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
-    parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
-    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
-    parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
-    parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-hs", "--human_speed", help="A checkpoint for the RL", default=True, action=argparse.BooleanOptionalAction)
+def training(args):
     
-    
-    args = parser.parse_args()
     if args.human_speed:
         slow = config.SLOW
     else:
@@ -104,7 +83,7 @@ def main():
         prev_action = np.zeros(args.environment, dtype=np.int64)
 
         with tqdm(total= args.episode, initial=start, desc="Training", unit="ep") as pbar:
-            while episode < args.episode:
+            while episode < (args.episode +1):
                 lap = time.time()
 
                 ready = np.ones(args.environment, dtype=bool) if not args.human_speed else action_lap >= args.execution
@@ -231,11 +210,113 @@ def main():
     
 
     except KeyboardInterrupt:
-        print("closing")
+        print("\nclosing...")
         env.close()
         wandb.finish()
-    
 
+def eval(check):
+    options = []
+    for i in os.listdir():
+        if os.path.exists(f"{i}/brain4900.pth"):
+            options.append(f"{i}/brain4900.pth")
+
+    print("Pick from the list which Agent you would like to evalute:")
+    for i in range(len(options)):
+        print(f"{i+1}.{options[i].split("/")[0]}")
+    brain = Brain()
+
+    while True:
+        try:
+            choice = int(input()) - 1
+
+            if choice > len(options) or choice < 0:
+                print("Your option doesn't exist in the list, please pick something from the list")
+                continue
+            print("loading in ", options[choice])
+            brain.load_checkpoint(options[choice])
+            break
+
+        except ValueError:
+            print("Please enter a number")
+            continue
+    
+    brain.policy.eval()
+    if check:
+        print("using real camera")
+        frame = Eyes()
+    else:
+        print("using in game info")
+        frame = Frames()
+    
+    env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
+    obs, _ = env.reset(seed=42)
+    if check:
+        state = frame.reset()
+    else:
+        state = frame.reset(obs)
+    
+    pygame.init()
+    screen = pygame.display.set_mode((1920, 1080), pygame.FULLSCREEN, display=2)
+    clock = pygame.time.Clock()
+    while True:
+        try:
+            action = brain.rollout(state)
+
+            obs, _, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            render = env.render()
+            surf = pygame.surfarray.make_surface(render.transpose(1, 0, 2))
+            scaled = pygame.transform.scale(surf, (1920, 1080))
+            screen.blit(scaled, (0, 0))
+            pygame.display.flip()
+            clock.tick(60)
+
+            if check:
+                state = frame.step()
+            else:
+                state = frame.step(obs)
+            
+            if done:
+                obs, _ = env.reset(seed=42)
+        except KeyboardInterrupt:
+            print("\nclosing...")
+            env.close()
+            break
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
+    parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
+    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
+    parser.add_argument("-ex", "--execution", help="The speed of the robot arm", type=float, default=config.EXECUTION)
+    parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
+    parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
+    parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
+    parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
+    parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
+    parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
+    parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
+    parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
+    parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
+    parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
+    parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
+    parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
+    parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
+    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
+    parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
+    parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-hs", "--human_speed", help="A checkpoint for the RL", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=True, action=argparse.BooleanOptionalAction)
+    
+    args = parser.parse_args()
+
+    if args.training:
+        training(args)
+    else:
+        eval(args.camera)
 
 
 if __name__ == "__main__":
