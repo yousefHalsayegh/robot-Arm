@@ -228,13 +228,19 @@ def main():
 
                 action_lap[ready] = 0.0
 
+    except Exception as e:
     
+        print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
+        print(f"[CRASH] Episode: {episode} | Steps: {steps}", flush=True)
+        env.close()
+        wandb.finish(exit_code=1)
+        raise
 
     except KeyboardInterrupt:
         print("closing")
         env.close()
         wandb.finish()
-    
+        raise
 
 
 
