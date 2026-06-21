@@ -148,7 +148,7 @@ def training(args):
                     "train/buffer_size":   len(brain.buffer),
                     "train/steps":         steps,
                     "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                }, step=steps)
+                }, step=episode)
 
                 for i in np.where(done)[0]:
                     ep_time = time.time() - ep[i]
@@ -182,8 +182,7 @@ def training(args):
                         "episode/actions_up": actions[i]["up"],
                         "episode/actions_down": actions[i]["down"],
                         "episode/actions_neutral": actions[i]["neutral"],
-                        "episode/episode": episode,
-                    }, step=steps)
+                    }, step=episode)
 
                     total_reward[i] = 0
                     tracking_reward[i] = 0
