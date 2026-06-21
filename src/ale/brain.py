@@ -5,14 +5,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from random import random, randint, sample
+from random import random, sample
 from collections import namedtuple, deque
 Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])
 
 
 class Brain():
-    def __init__(self, lr, wp, b, g, tau, ee, es, ed,c):
-        #the network aspect
+    def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0):
+        #fix it to work in both situations
         self.policy = Network().to("cuda")
         self.optimiser = optim.Adam(self.policy.parameters(), lr=lr)
         self.loss_fn = nn.MSELoss()
