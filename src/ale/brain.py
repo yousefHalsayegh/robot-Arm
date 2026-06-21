@@ -93,7 +93,7 @@ class Brain():
                 "policy" : self.policy.state_dict(),
                 "test" : self.test.state_dict(),
                 "optimizer" : self.optimiser.state_dict()
-            }, f"{path}/brain{episode}.pth"
+            }, f"{path}/Checkpoints/brain{episode}.pth"
         )
     def save(self, path):
         torch.save(self.policy.state_dict(), f"{path}/brain.pth")
