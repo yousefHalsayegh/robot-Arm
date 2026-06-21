@@ -51,4 +51,4 @@ logs/
 
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
-**/Checkpoints/*.pth
+**/Checkpoints/
