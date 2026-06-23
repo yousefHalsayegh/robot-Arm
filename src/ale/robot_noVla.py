@@ -24,6 +24,9 @@ CONTROLLER = {
 }
 
 class Robot():
+    """
+    Create a SO101 link without the VLA being present
+    """
     def __init__(self):
 
         self.rb= make_robot_from_config(SOFollowerRobotConfig(
@@ -39,6 +42,7 @@ class Robot():
                 )
             }
         ))
+        #connects to the robot and initalize all the necessary info
         self.rb.connect()
         self.positions = {
             "home" : {},
@@ -48,13 +52,15 @@ class Robot():
         }
         self.reseting = False
         self.acting = False
-        self.serial_lock = threading.Lock()
         self.task = "neutral"
         self.action = 0
         self.prev = 0
         self.actions = {'all' : 0, 'neutral': 0, 'down': 0, 'up':0}
 
     def controller(self):
+        """
+        Reads the actions from the controller
+        """
         while True:
             try:
                 events = inputs.get_gamepad()
@@ -69,6 +75,7 @@ class Robot():
                     act = CONTROLLER.get(key)
 
                     self.action = act
+                    #done to measure action frequency vs called frequency from the RL
                     if self.prev != self.action:
                         self.prev = self.action
                         if act == 2:
@@ -84,6 +91,9 @@ class Robot():
                 break
 
     def start(self):
+        """
+        Used to save the location of each direction
+        """
         tp = make_teleoperator_from_config(SOLeaderTeleopConfig(
             port="/dev/ttyLEADER",
             id="fighter_l"
@@ -93,6 +103,7 @@ class Robot():
             for i in ['home', 'neutral', 'up', 'down']:
                 if not self.positions[i]:
                     print("taking the postion for ", i)
+                    #takes from the teleoperate script to use the leader arm as a way to save location
                     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
                     teleop_loop(
                         teleop=tp, 
@@ -113,6 +124,9 @@ class Robot():
             tp.disconnect()
 
     def act(self):
+        """
+        Sends the new coordinates depending on the task
+        """
         while True:
             try:
                 if self.reseting:
@@ -126,6 +140,9 @@ class Robot():
 
 
     def inital(self):
+        """
+        Moves the robot arm toward home position
+        """
         self.reseting = True
         time.sleep(config.EXECUTION + 0.1)
         home = self.positions['home']
@@ -147,6 +164,9 @@ class Robot():
         self.reseting = False
 
     def reset(self):
+        """
+        Moves the robot arm toward neutral positions
+        """
         self.reseting = True
         time.sleep(config.EXECUTION + 0.1)
         neutral = self.positions['neutral']

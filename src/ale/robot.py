@@ -13,33 +13,20 @@ from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 
 CONTROLLER = {
-    # D-pad vertical → paddle movement
-    ('ABS_HAT0Y', -1): 2,   # up   → RIGHT (paddle up)
-    ('ABS_HAT0Y',  1): 3,   # down → LEFT  (paddle down)
-    ('ABS_HAT0Y',  0): 0,   # released → NOOP
+    # Keep in mind this is on the X/Y trgger not DP and the values are for Pong
+    ('ABS_Y', 0): 2,   # up 
+    ('ABS_Y',  255): 3,   # down
+    ('ABS_Y',  128): 0,   # Neutral
 
-    # D-pad horizontal (not used in Pong but mapped anyway)
-    ('ABS_HAT0X', -1): 3,   # left
-    ('ABS_HAT0X',  1): 2,   # right
-    ('ABS_HAT0X',  0): 0,
-
-    # Face buttons
-    ('BTN_SOUTH', 1): 1,    # A → FIRE (serve)
-    ('BTN_EAST',  1): 1,    # B → FIRE
-    ('BTN_NORTH', 1): 1,    # Y → FIRE
-    ('BTN_WEST',  1): 0,    # X → NOOP
-
-    # Bumpers
-    ('BTN_TR',  1): 2,      # RB → paddle up
-    ('BTN_TL',  1): 3,      # LB → paddle down
-    ('BTN_TR2', 1): 1,      # RT digital → FIRE
-    ('BTN_TL2', 1): 1,      # LT digital → FIRE
 }
 
 
 class Robot():
+    """
+    Create the connection with SO101 arm, while using a VLA 
+    """
     def __init__(self, init_action_per_chunk=config.ACTION_PER_CHUNK, init_chunk_size_threshold = config.CHUNK_SIZE, init_aggregate_fn_name = config.AGGREGATE):
-
+        #initializing the connection with the SO101
         rcf = RobotClientConfig(
             policy_type="smolvla",
             pretrained_name_or_path=config.POLICY,
@@ -65,6 +52,8 @@ class Robot():
         )
 
         self.client = RobotClient(rcf)
+
+        #Starting information, to ensure the robot is ready 
         self.action = 1
         self.task = random.choice(["up", "down"])
         home_obs = self.client.robot.get_observation()
@@ -72,6 +61,9 @@ class Robot():
         self.reseting = False
 
     def controller(self):
+        """
+        Used to read the input from the Arcade stick
+        """
         while True:
             try:
                 events = inputs.get_gamepad()
@@ -92,6 +84,10 @@ class Robot():
 
 
     def send(self):
+        """
+        Send observaton to the server to collect actions and execute the actions
+        """
+
         self.client.start_barrier.wait()
         while True:
             control_loop_start = time.perf_counter()
@@ -112,16 +108,25 @@ class Robot():
 
 
     def update_task(self, new_task):
+        """
+        Changes the task as long as there is a new task
+        """
         if self.task != new_task:
             self.task = new_task
 
     def flush(self):
+        """
+        FLush out the server side so that no conflicting actins are present
+        """
         with self.client.action_queue_lock:
             self.client.action_queue.queue.clear()
 
         self.client.must_go.set()
 
     def reset(self):
+        """
+        Return the robot arm to home positions
+        """
         self.reseting = True
 
         time.sleep(0.1)
@@ -130,17 +135,15 @@ class Robot():
         TIMEOUT   = 10.0
         GRIPPER = 35.0
         
-        if self.task.split(" ")[0] == "up":
-            self.task = "down"
-        else:
-            self.task = "up"
-
+        #reads the current location of the arm
         obs     = self.client.robot.get_observation()
         current = {k: obs[k] for k in self.home_position if k in obs}
         current["gripper.pos"] = GRIPPER
+        #sends to only move the gripper so that nothing breaks
         self.client.robot.send_action(current)
         time.sleep(1.0)
 
+        #keeping the gripper location in mind send to move to home positon
         obs     = self.client.robot.get_observation()
         home_cmd = {**self.home_position, "gripper.pos": GRIPPER}
 

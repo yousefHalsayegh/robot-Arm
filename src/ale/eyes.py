@@ -9,13 +9,20 @@ from collections import deque
 
 class Eyes:
     def __init__(self, n=4):
+            #start the pipeline which reads the camera
             self.pipeline = rs.pipeline()
+
+            #provide information about the camera
             config = rs.config()
             config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
             config.enable_device('814412071258')
             self.pipeline.start(config)
+
+            #create a queue to collect frame movement
             self.frames = deque(maxlen=n)
             self.n = n
+            
+            #hard coded currently on the corners of the screen
             self.screen_corner = np.array([
                     [[373, 260]],
                     [[895, 261]],
@@ -25,7 +32,9 @@ class Eyes:
             
 
     def watch(self):
-
+        """
+        Used to stream the camera into a screen, allowing adjustments
+        """
         while True:
             frames = self.pipeline.wait_for_frames()
             color_frame = frames.get_color_frame()
@@ -39,6 +48,9 @@ class Eyes:
 
 
     def preprocess(self, img):
+        """
+        Fixes up the image to be similar to Atrari preprocessing
+        """
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         img = cv2.resize(img, (84,84))
         img = img/255.0
@@ -46,12 +58,18 @@ class Eyes:
         return img.astype(np.float32)
 
     def reset(self):
+        """
+        Reset the collected frames
+        """
         proc = self.preprocess(self.get_frame())
         for _ in range(self.n):
             self.frames.append(proc)
         return self._get_state()
 
     def step(self):
+        """
+        Adds a frame into the queue 
+        """
         self.frames.append(self.preprocess(self.get_frame()))
         return self._get_state()
 
@@ -59,12 +77,18 @@ class Eyes:
         return np.stack(self.frames, axis=0)
     
     def get_frame(self):
+        """
+        Takes a frame from the camera
+        """
         frames = self.pipeline.wait_for_frames()
         color_frame = frames.get_color_frame()
         frame = np.ascontiguousarray(np.asanyarray(color_frame.get_data()))
         return self.crop_to_screen(frame, self.screen_corner)
 
     def find_screen(self, frame, min_width=495, max_width=575, min_height=271, max_height=351):
+        """
+        Ideally finds the coordinates of the screen and then crops toward it
+        """
         #TODO: doesn't work properly need fixing
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -115,6 +139,9 @@ class Eyes:
         return best[1]
             
     def crop_to_screen(self, frame, corner):
+        """
+        Cropes the camera view into the location of the frame
+        """
         pts = corner.reshape(4, 2).astype(np.float32)
         rect = np.zeros((4, 2), dtype=np.float32)
         s = pts.sum(axis=1)
@@ -131,6 +158,9 @@ class Eyes:
         return cv2.warpPerspective(frame, M, (w, h))
 
 class Frames():
+    """
+    This class is used in the place of the camera class to read directly from the game state.
+    """
     def __init__(self, n=4):
         self.frames = deque(maxlen=n)
         self.n = n

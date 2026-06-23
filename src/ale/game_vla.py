@@ -1,6 +1,4 @@
-"""
-the ALE part training the robot
-"""
+#TODO needs change and update to fit the other ones 
 
 import ale_py
 import gymnasium as gym

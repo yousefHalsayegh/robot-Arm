@@ -16,61 +16,47 @@ from brain import Brain
 import pygame
 
 gym.register_envs(ale_py)
-def picking():
-    options = []
-    for i in os.listdir():
-        if os.path.exists(f"{i}/brain4900.pth"):
-            options.append(f"{i}/brain4900.pth")
-
-    print("Pick from the list which Agent you would like to evalute:")
-    for i in range(len(options)):
-        print(f"{i+1}.{options[i].split("/")[0]}")
-    
-
-    while True:
-        try:
-            choice = int(input()) - 1
-
-            if choice > len(options) or choice < 0:
-                print("Your option doesn't exist in the list, please pick something from the list")
-                continue
-            print("loading in ", options[choice])
-            
-            return options[choice]
-
-        except ValueError:
-            print("Please enter a number")
-            continue
 def main():
 
     robot = Robot()
 
+    #in case there is already saved positons use them
     if os.path.exists("positions.json"):
         with open("positions.json", "r") as f:
             temp = json.load(f)
         robot.positions = {keys:values for keys, values in temp.items()}
     
+    #start the robot and put it at home
     robot.start()
-
     robot.inital()
+
+    #pick the agent to test on 
     brain = Brain()
-    brain.load_checkpoint(picking())
+    brain.picking()
     brain.policy.eval()
+
+    #use either camera or ingame obs
     choice = config.SWITCH
     print("using real camera") if choice else print("using in game info") 
     frame = Eyes() if choice else Frames()
+
+    #initalize the env
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
     state = frame.reset() if choice else frame.reset(obs)
 
+    #start threading for reading the input, move the arm and playing the game
     controller = threading.Thread(target=robot.controller, daemon=True)
     controller.start()
 
     act = threading.Thread(target=robot.act, daemon=True)
     act.start()
+
+    #save the postions
     with open("positions.json", "w") as f:
         json.dump(robot.positions, f, indent=2)
 
+    #render the screen on a specific display
     pygame.init()
     screen = pygame.display.set_mode((1920, 1080), pygame.FULLSCREEN, display=2)
     clock = pygame.time.Clock()
@@ -80,7 +66,7 @@ def main():
             prev_action = 0
             while True:
 
-                
+                #get the action needed after completing the previous action
                 if prev_action == robot.action:
                     action = brain.rollout(state)
                     if action == 2 or action ==4:
@@ -97,9 +83,11 @@ def main():
 
                     prev_action = action
 
+                #move the state forward
                 obs, _, terminated, truncated, _ = env.step(robot.action)
                 done = terminated or truncated
 
+                #render the state
                 render = env.render()
                 surf = pygame.surfarray.make_surface(render.transpose(1, 0, 2))
                 scaled = pygame.transform.scale(surf, (1920, 1080))
@@ -113,10 +101,11 @@ def main():
                 if done:
                     obs, _ = env.reset(seed=42)
                     choice = not choice
+                    #restart, change the current way of obs and pick a new model to eval
                     print("switching to camera setting")
                     frame = Eyes() if choice else Frames()
                     brain = Brain()
-                    brain.load_checkpoint(picking())
+                    brain.picking()
                     brain.policy.eval()
 
 

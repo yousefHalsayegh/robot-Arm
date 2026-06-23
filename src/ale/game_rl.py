@@ -20,12 +20,18 @@ gym.register_envs(ale_py)
 
 
 def format_time(seconds):
+    """
+    Used to make time more readable
+    """
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 def env_init(seed, N):
+    """
+    Used to create multiple envs and preprocess the data
+    """
     def _init():
         env = gym.make("ALE/Pong-v5", frameskip=1)
         env = gym.wrappers.AtariPreprocessing(
@@ -42,18 +48,20 @@ def env_init(seed, N):
     return _init
 
 def training(args):
-    
-    if args.human_speed:
-        slow = config.SLOW
-    else:
-        slow = 0
+    """
+    Runs the RL agent in training mode
+    """
 
-    
+    #make the code slower as if it is being rendered 
+    slow = config.SLOW if args.human_speed else 0 
+
+    #inital the environemt
     env = gym.vector.SyncVectorEnv([env_init(42, i) for i in range(args.environment)])
     brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, args.eps_start, args.eps_decay, args.capacity)
     steps = 0
     episode_time = []
 
+    #create or call a certain checkpoint
     if os.path.exists(f"{args.job_name}/brain{args.checkpoint}"):
         steps, start = brain.load_checkpoint()
         print("loading... brain", args.checkpoint )
@@ -64,31 +72,38 @@ def training(args):
         steps, start = 0, 0 
     arg_name = vars(args).pop("job_name")
 
+    #starting logining in wandb
     wandb.init(
         project="RL for Games",
         name=arg_name,
         config= args
     )
+    #The main part 
     try:
         episode = start
         obs, _ = env.reset()
         state = obs
 
-        total_reward = np.zeros(args.environment)
-        ep = [time.time()] * args.environment
-        goal_reward = np.zeros(args.environment)
-        tracking_reward = np.zeros(args.environment)
-        prev_paddle_y = [None] * args.environment
-        action_lap = np.zeros(args.environment)
-        actions = [{"all": 0, "up" : 0, "down": 0, "neutral": 0} for _ in range(args.environment)]
-        prev_action = np.zeros(args.environment, dtype=np.int64)
-
+        #initalizing tracking metrics for the run
+        total_reward = np.zeros(args.environment) #the total collected reward
+        ep = [time.time()] * args.environment #the time for the episode 
+        goal_reward = np.zeros(args.environment) #the reward taken directly from the ALE 
+        tracking_reward = np.zeros(args.environment) #the reward calculated by following the ball direction
+        prev_paddle_y = [None] * args.environment #the location of the paddle
+        action_lap = np.zeros(args.environment) #simulate the action time of the robot arm
+        actions = [{"all": 0, "up" : 0, "down": 0, "neutral": 0} for _ in range(args.environment)] #the amount of actions done
+        prev_action = np.zeros(args.environment, dtype=np.int64) #the action prior to ensure no repeated actions
+        
         with tqdm(total= args.episode, initial=start, desc="Training", unit="ep") as pbar:
+            #runing as long as the episode count
             while episode < (args.episode +1):
+                #tracks the overall time of a step
                 lap = time.time()
 
+                #checks which env passed the execution limit
                 ready = np.ones(args.environment, dtype=bool) if not args.human_speed else action_lap >= args.execution
 
+                #predicting the next action and tracking overall the action metrics
                 action = brain.predict_next_action(state,steps, env)
                 current_actions = np.where(ready, action, prev_action)
                 for i in range(args.environment):
@@ -102,26 +117,27 @@ def training(args):
                         actions[i]["all"] += 1
                 prev_action = current_actions.copy()
 
-
+                #move the environemtn forward and extracting necesary info 
                 obs, raw_reward, terminated, truncated, _ = env.step(current_actions)
                 reward = np.zeros(args.environment)
                 done = terminated | truncated
                 next_state = obs
 
                 for i in range(args.environment):
-                    
+                    #calcuate the goal reward direct from the env
                     if raw_reward[i] != 0:
                         goal = np.sign(raw_reward[i])
                         reward[i] += goal
                         goal_reward[i] += goal
 
-
+                    #in case full reward is passed calcaulte the ball + paddle postion and then calcualte the reward for them
                     if args.full_rewards:
                         new_ball_y, new_paddle_y = brain.ball_position(next_state[i][-1])
                         if new_ball_y is not None and new_paddle_y is not None and prev_paddle_y[i] is not None:
                             new_distance = abs(new_ball_y - new_paddle_y)
                             prev_distance = abs(new_ball_y - prev_paddle_y[i])
 
+                            #if clipping is used then only inc/dec by 1 if not then calculate the reward with scaling
                             if new_distance < prev_distance:
                                 reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
                                 tracking_reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
@@ -132,16 +148,22 @@ def training(args):
 
                         prev_paddle_y[i] = new_paddle_y
 
+                #clipped the reward if stated 
                 clipped = np.clip(reward, -1, 1) if args.clip_reward else reward
+                
+                #populate the buffer
                 for i in range(args.environment):
                     brain.buffer.push(state[i], current_actions[i], clipped[i], next_state[i], float(done[i]))
+
+                #tracking info
                 total_reward += clipped
                 steps += args.environment
                 
+                #passing the training depending on the updates called
                 for _ in range(args.updates):
                     loss, grad_norm = brain.train()
 
-
+                #logging the steps info
                 wandb.log({
                     "train/loss":          loss,
                     "train/grad_norm":     grad_norm,
@@ -151,15 +173,19 @@ def training(args):
                     "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
                 }, step=episode)
 
+                #after the episode being done, and calculating the necessary metrics
                 for i in np.where(done)[0]:
                     ep_time = time.time() - ep[i]
                     episode_time.append(ep_time)
                     eta = np.mean(episode_time[-100:]) * (args.episode - episode - 1)
+
+                    #saving when necessary
                     if episode % args.mid_save == 0 and episode != 0: 
                         brain.save_checkpoint(episode, steps,arg_name)
                     if episode % args.full_save == 0 and episode != 0: 
                         brain.save()
 
+                    #updating the progress bar
                     pbar.set_postfix({
                         "env": i,
                         "ep": episode,
@@ -174,6 +200,7 @@ def training(args):
 
                     pbar.update(1)
 
+                    #updating the episode level metrics
                     wandb.log({
                         "episode/total_reward": total_reward[i],
                         "episode/goal_reward": goal_reward[i],
@@ -185,6 +212,7 @@ def training(args):
                         "episode/actions_neutral": actions[i]["neutral"],
                     }, step=episode)
 
+                    #restarting
                     total_reward[i] = 0
                     tracking_reward[i] = 0
                     goal_reward[i] = 0
@@ -196,6 +224,7 @@ def training(args):
                     episode += 1
                 state = next_state
 
+                #in case slow mode is used pushing for a buffer
                 overall = max(0, slow- (time.time() - lap))
                 time.sleep(overall)
                 action_lap += overall
@@ -203,7 +232,7 @@ def training(args):
                 action_lap[ready] = 0.0
 
     except Exception as e:
-    
+        #helps in logging any crashs
         print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
         print(f"[CRASH] Episode: {episode} | Steps: {steps}", flush=True)
         env.close()
@@ -216,46 +245,35 @@ def training(args):
         wandb.finish()
 
 def eval(check):
-    options = []
-    for i in os.listdir():
-        if os.path.exists(f"{i}/brain.pth"):
-            options.append(f"{i}/brain.pth")
-
-    print("Pick from the list which Agent you would like to evalute:")
-    for i in range(len(options)):
-        print(f"{i+1}.{options[i].split('/')[0]}")
+    """
+    Runs the RL agent in eval mode
+    """
     brain = Brain()
-
-    while True:
-        try:
-            choice = int(input()) - 1
-
-            if choice > len(options) or choice < 0:
-                print("Your option doesn't exist in the list, please pick something from the list")
-                continue
-            print("loading in ", options[choice])
-            brain.load_checkpoint(options[choice])
-            break
-
-        except ValueError:
-            print("Please enter a number")
-            continue
+    brain.picking()
     
+    #start the model on eval mode
     brain.policy.eval()
+
+    #depending on the flag passed either camera or in game observation is used
     print("using real camera") if check else print("using in game info") 
     frame = Eyes() if check else Frames()
     
+    #initalising the env
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
     state = frame.reset() if check else frame.reset(obs)
     
+    #rendering the info in the proper screen for the camera
     pygame.init()
     screen = pygame.display.set_mode((1920, 1080), pygame.FULLSCREEN, display=2)
     clock = pygame.time.Clock()
     while True:
+        #main loop
         try:
+            #calcultnig the state
             action = brain.rollout(state)
 
+            #moving the state forward and rendering it 
             obs, _, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             render = env.render()
@@ -268,6 +286,7 @@ def eval(check):
             state = frame.reset() if check else frame.reset(obs)
             
             if done:
+                #keeps switching between camera and in game
                 obs, _ = env.reset(seed=42)
                 check = not check
                 print("switching to camera setting")
@@ -281,6 +300,7 @@ def eval(check):
 
 def main():
 
+    #The argumaents provided in the code
     parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
     parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
     parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
