@@ -57,19 +57,11 @@ def main():
     brain.load_checkpoint(picking())
     brain.policy.eval()
     choice = config.SWITCH
-    if choice:
-        print("using real camera")
-        frame = Eyes()
-    else:
-        print("using in game info")
-        frame = Frames()
-
+    print("using real camera") if choice else print("using in game info") 
+    frame = Eyes() if choice else Frames()
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
-    if choice:
-        state = frame.reset()
-    else:
-        state = frame.reset(obs)
+    state = frame.reset() if choice else frame.reset(obs)
 
     controller = threading.Thread(target=robot.controller, daemon=True)
     controller.start()
@@ -116,21 +108,13 @@ def main():
                 clock.tick(60)
 
 
-                if choice:
-                    state = frame.step()
-                else:
-                    state = frame.step(obs)
+                state = frame.reset() if choice else frame.reset(obs)
 
                 if done:
                     obs, _ = env.reset(seed=42)
-                    choice != choice
-                    print("switching to:")
-                    if choice:
-                        print("using real camera")
-                        frame = Eyes()
-                    else:
-                        print("using in game info")
-                        frame = Frames()
+                    choice = not choice
+                    print("switching to camera setting")
+                    frame = Eyes() if choice else Frames()
                     brain = Brain()
                     brain.load_checkpoint(picking())
                     brain.policy.eval()

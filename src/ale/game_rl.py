@@ -60,6 +60,7 @@ def training(args):
     else:
         if not os.path.exists(f"{args.job_name}/"):
             os.mkdir(f"{args.job_name}/")
+            os.mkdir(f"{args.job_name}/Checkpoints/")
         steps, start = 0, 0 
     arg_name = vars(args).pop("job_name")
 
@@ -109,8 +110,6 @@ def training(args):
 
                 for i in range(args.environment):
                     
-                    
-
                     if raw_reward[i] != 0:
                         goal = np.sign(raw_reward[i])
                         reward[i] += goal
@@ -124,19 +123,16 @@ def training(args):
                             prev_distance = abs(new_ball_y - prev_paddle_y[i])
 
                             if new_distance < prev_distance:
-                                reward[i] += 1
-                                tracking_reward[i] += 1
-                            elif new_distance >= prev_distance:
-                                reward[i] -= 1
-                                tracking_reward[i] -= 1
-                            
-                            if (abs(new_paddle_y - config.CENTER_Y)) > args.threshold:
-                                reward[i] -= 1
-                                tracking_reward[i] -= 1
+                                reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                tracking_reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+
+                            elif new_distance > config.THRESHOLD * config.CROP and new_distance >= prev_distance:
+                                reward[i] -= 1 if args.clip_reward else config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                                tracking_reward[i] -= 1 if args.clip_reward else config.DISTANCE_REWARD * config.PENALTIY_MOVE
 
                         prev_paddle_y[i] = new_paddle_y
 
-                clipped = np.clip(reward, -1, 1)
+                clipped = np.clip(reward, -1, 1) if args.clip_reward else reward
                 for i in range(args.environment):
                     brain.buffer.push(state[i], current_actions[i], clipped[i], next_state[i], float(done[i]))
                 total_reward += clipped
@@ -153,7 +149,7 @@ def training(args):
                     "train/buffer_size":   len(brain.buffer),
                     "train/steps":         steps,
                     "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                }, step=steps)
+                }, step=episode)
 
                 for i in np.where(done)[0]:
                     ep_time = time.time() - ep[i]
@@ -187,8 +183,7 @@ def training(args):
                         "episode/actions_up": actions[i]["up"],
                         "episode/actions_down": actions[i]["down"],
                         "episode/actions_neutral": actions[i]["neutral"],
-                        "episode/episode": episode,
-                    }, step=steps)
+                    }, step=episode)
 
                     total_reward[i] = 0
                     tracking_reward[i] = 0
@@ -207,7 +202,13 @@ def training(args):
 
                 action_lap[ready] = 0.0
 
+    except Exception as e:
     
+        print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
+        print(f"[CRASH] Episode: {episode} | Steps: {steps}", flush=True)
+        env.close()
+        wandb.finish(exit_code=1)
+        raise
 
     except KeyboardInterrupt:
         print("\nclosing...")
@@ -217,12 +218,12 @@ def training(args):
 def eval(check):
     options = []
     for i in os.listdir():
-        if os.path.exists(f"{i}/brain4900.pth"):
-            options.append(f"{i}/brain4900.pth")
+        if os.path.exists(f"{i}/brain.pth"):
+            options.append(f"{i}/brain.pth")
 
     print("Pick from the list which Agent you would like to evalute:")
     for i in range(len(options)):
-        print(f"{i+1}.{options[i].split("/")[0]}")
+        print(f"{i+1}.{options[i].split('/')[0]}")
     brain = Brain()
 
     while True:
@@ -241,19 +242,12 @@ def eval(check):
             continue
     
     brain.policy.eval()
-    if check:
-        print("using real camera")
-        frame = Eyes()
-    else:
-        print("using in game info")
-        frame = Frames()
+    print("using real camera") if check else print("using in game info") 
+    frame = Eyes() if check else Frames()
     
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
-    if check:
-        state = frame.reset()
-    else:
-        state = frame.reset(obs)
+    state = frame.reset() if check else frame.reset(obs)
     
     pygame.init()
     screen = pygame.display.set_mode((1920, 1080), pygame.FULLSCREEN, display=2)
@@ -271,13 +265,13 @@ def eval(check):
             pygame.display.flip()
             clock.tick(60)
 
-            if check:
-                state = frame.step()
-            else:
-                state = frame.step(obs)
+            state = frame.reset() if check else frame.reset(obs)
             
             if done:
                 obs, _ = env.reset(seed=42)
+                check = not check
+                print("switching to camera setting")
+                frame = Eyes() if check else Frames()
         except KeyboardInterrupt:
             print("\nclosing...")
             env.close()
@@ -310,6 +304,7 @@ def main():
     parser.add_argument("-hs", "--human_speed", help="A checkpoint for the RL", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
     
     args = parser.parse_args()
 
