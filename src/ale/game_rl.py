@@ -59,6 +59,7 @@ def training(args):
         print("loading... brain", args.checkpoint )
     else:
         if not os.path.exists(f"{args.job_name}/"):
+            os.mkdir(f"{args.job_name}/")
             os.mkdir(f"{args.job_name}/Checkpoints/")
         steps, start = 0, 0 
     arg_name = vars(args).pop("job_name")
@@ -217,12 +218,12 @@ def training(args):
 def eval(check):
     options = []
     for i in os.listdir():
-        if os.path.exists(f"{i}/brain4900.pth"):
-            options.append(f"{i}/brain4900.pth")
+        if os.path.exists(f"{i}/brain.pth"):
+            options.append(f"{i}/brain.pth")
 
     print("Pick from the list which Agent you would like to evalute:")
     for i in range(len(options)):
-        print(f"{i+1}.{options[i].split("/")[0]}")
+        print(f"{i+1}.{options[i].split('/')[0]}")
     brain = Brain()
 
     while True:
