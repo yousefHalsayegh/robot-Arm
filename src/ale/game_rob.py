@@ -66,10 +66,17 @@ def training(args):
     )
 
     print("using real camera") if args.camera else print("using in game info") 
-    frame = Eyes() if args.camera else Frames()
+    if args.camera:
+        frame = Frames()
+        switch = True
+        eye = Eyes()
+    else:
+        switch = False
+        frame = Frames()
+
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
-    state = frame.reset() if args.camera else frame.reset(obs)
+    state = eye.reset() if switch else frame.reset(obs)
 
     #start threading for reading the input, move the arm and playing the game
     controller = threading.Thread(target=robot.controller, daemon=True)
@@ -95,7 +102,7 @@ def training(args):
     try :
         with tqdm(total= args.episode, initial=start, desc="Training", unit="ep") as pbar:
             while episode < (args.episode +1):
-                if prev_action == robot.action or (fail_safe >= 10 and robot.action != action):
+                if (prev_action == robot.action and robot.action == action) or (fail_safe >= 10 and robot.action != action):
                         action = brain.predict_next_action(state, steps, env)
                         if action == 2 or action ==4:
                             action = 2
@@ -118,7 +125,7 @@ def training(args):
                     #move the state forward
                 obs, reward, terminated, truncated, _ = env.step(robot.action)
                 done = terminated or truncated
-                next_state = frame.step() if args.camera else frame.step(obs)
+                next_state = eye.step() if switch else frame.step(obs)
 
                 #render the stateactions = [{"all": 0, "up" : 0, "down": 0, "neutral": 0}
                 render = env.render()
@@ -193,7 +200,13 @@ def training(args):
                     robot.reset()
                     fail_safe = 0
                     obs, _ = env.reset(seed=42)
-                    state = frame.reset() if args.camera else frame.reset(obs)
+                    if episode > 1 and episode%10==0 and args.camera:
+                        switch = not switch
+                        if switch:
+                            print("using the camera")
+                        else:
+                            print("using in game info")
+                    state = eye.reset() if switch else frame.reset(obs)
                 state = next_state
 
     except KeyboardInterrupt:
