@@ -62,7 +62,7 @@ def training(args):
     episode_time = []
 
     #create or call a certain checkpoint
-    if os.path.exists(f"{args.job_name}/brain{args.checkpoint}"):
+    if os.path.exists(f"{args.job_name}/Checkpoints/brain{args.checkpoint}"):
         steps, start = brain.load_checkpoint()
         print("loading... brain", args.checkpoint )
     else:
@@ -70,7 +70,7 @@ def training(args):
             os.mkdir(f"{args.job_name}/")
             os.mkdir(f"{args.job_name}/Checkpoints/")
         steps, start = 0, 0 
-    arg_name = vars(args).pop("job_name")
+    arg_name = f"RL Agent-{vars(args).pop("job_name")}"
 
     #starting logining in wandb
     wandb.init(
@@ -169,9 +169,9 @@ def training(args):
                     "train/grad_norm":     grad_norm,
                     "train/epsilon":       brain.eps,
                     "train/buffer_size":   len(brain.buffer),
-                    "train/steps":         steps,
+                    "train/episode":         episode,
                     "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                }, step=episode)
+                }, step=steps)
 
                 #after the episode being done, and calculating the necessary metrics
                 for i in np.where(done)[0]:
@@ -244,7 +244,7 @@ def training(args):
         env.close()
         wandb.finish()
 
-def eval(check):
+def eval(args):
     """
     Runs the RL agent in eval mode
     """
@@ -255,18 +255,20 @@ def eval(check):
     brain.policy.eval()
 
     #depending on the flag passed either camera or in game observation is used
-    print("using real camera") if check else print("using in game info") 
-    frame = Eyes() if check else Frames()
+    print("using real camera") if args.camera else print("using in game info") 
+    frame = Eyes() if args.camera else Frames()
     
     #initalising the env
     env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
     obs, _ = env.reset(seed=42)
-    state = frame.reset() if check else frame.reset(obs)
+    state = frame.reset() if args.camera else frame.reset(obs)
     
     #rendering the info in the proper screen for the camera
     pygame.init()
     screen = pygame.display.set_mode((1920, 1080), pygame.FULLSCREEN, display=2)
     clock = pygame.time.Clock()
+    total_reward = 0
+    count = 0
     while True:
         #main loop
         try:
@@ -274,7 +276,7 @@ def eval(check):
             action = brain.rollout(state)
 
             #moving the state forward and rendering it 
-            obs, _, terminated, truncated, _ = env.step(action)
+            obs, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             render = env.render()
             surf = pygame.surfarray.make_surface(render.transpose(1, 0, 2))
@@ -282,15 +284,18 @@ def eval(check):
             screen.blit(scaled, (0, 0))
             pygame.display.flip()
             clock.tick(60)
-
-            state = frame.reset() if check else frame.reset(obs)
+            total_reward += reward
+            state = frame.reset() if args.camera else frame.reset(obs)
             
             if done:
-                #keeps switching between camera and in game
                 obs, _ = env.reset(seed=42)
-                check = not check
-                print("switching to camera setting")
-                frame = Eyes() if check else Frames()
+                print(f"{count+1}.Evaluating {brain.agent}, the score is : {total_reward}")
+                count += 1 
+                total_reward = 0
+                if count > args.iterations:
+                    print("Done testing ", brain.agent)
+                    break
+                
         except KeyboardInterrupt:
             print("\nclosing...")
             env.close()
@@ -325,13 +330,14 @@ def main():
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-test", "--testing", help="Reward Clipping", default=config.TESTING, type=int)
     
     args = parser.parse_args()
 
     if args.training:
         training(args)
     else:
-        eval(args.camera)
+        eval(args)
 
 
 if __name__ == "__main__":

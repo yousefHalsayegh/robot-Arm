@@ -35,7 +35,8 @@ class Brain():
         self.eps_end = ee
         self.eps_start = es
         self.eps_decay = ed
-    
+
+        self.agent = ""
     def train(self):
        """
        Training the policy netwrok, given the collected observations
@@ -103,9 +104,9 @@ class Brain():
             return env.action_space.sample()
 
         with torch.no_grad():
-            state_next = torch.FloatTensor(state).to("cuda")
-            return self.policy(state_next).argmax(dim=1).cpu().numpy().astype(np.int64)
-
+            state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
+            return self.policy(state_next).argmax(dim=1).item()
+        
     def save_checkpoint(self, episode, steps, path="checkpoint"):
         """
         Used to save a specific spot in the training allowing continuation
@@ -169,8 +170,8 @@ class Brain():
         """
         options = []
         for i in os.listdir():
-            if os.path.exists(f"{i}/brain4900.pth"):
-                options.append(f"{i}/brain4900.pth")
+            if os.path.exists(f"{i}/Checkpoints/brain4800.pth"):
+                options.append(f"{i}/Checkpoints/brain4800.pth")
 
         print("Pick from the list which Agent you would like to evalute:")
         for i in range(len(options)):
@@ -186,6 +187,7 @@ class Brain():
                     continue
                 print("loading in ", options[choice])
                 self.load_checkpoint(options[choice])
+                self.agent = options[choice]
                 break 
 
             except ValueError:
