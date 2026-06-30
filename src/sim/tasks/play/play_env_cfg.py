@@ -78,8 +78,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
     #camera
-    camera = CameraCfg(
-        prim_path = "{ENV_REGEX_NS}/camera",
+    camera_1 = CameraCfg(
+        prim_path = "{ENV_REGEX_NS}/camera_1",
         update_period=0.1,
         height=400,
         width=400,
@@ -87,7 +87,19 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=15.0, focus_distance=200.0, horizontal_aperture=20.955, clipping_range=(0.1, 1.0e5)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(1.3, 0.0, 0.1), rot=(0, 0.0, 0, 0.1), convention="world"),
+        offset=CameraCfg.OffsetCfg(pos=(0.32268, 0.24807, 0.27), rot=(0, 0.0, 0, 0.1), convention="world"),
+    )
+
+    camera_2 = CameraCfg(
+        prim_path = "{ENV_REGEX_NS}/camera_2",
+        update_period=0.1,
+        height=400,
+        width=400,
+        data_types=["rgb", "distance_to_image_plane"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=15.0, focus_distance=200.0, horizontal_aperture=20.955, clipping_range=(0.1, 1.0e5)
+        ),
+        offset=CameraCfg.OffsetCfg(pos=(-0.24, -0.12, 0.32), rot=(0, 0.0, 0, 0.1), convention="world"),
     )
 
 ##
@@ -137,12 +149,13 @@ class ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
-        wrist = ObsTerm(
-            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist"), "data_type": "rgb", "normalize": False}
-        )
-        front = ObsTerm(
-            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("front"), "data_type": "rgb", "normalize": False}
-        )
+        #need to recheck wtf is this
+        # wrist = ObsTerm(
+        #     func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist"), "data_type": "rgb", "normalize": False}
+        # )
+        # front = ObsTerm(
+        #     func=mdp.image, params={"sensor_cfg": SceneEntityCfg("front"), "data_type": "rgb", "normalize": False}
+        # )
     
 
         actions = ObsTerm(func=mdp.last_action)
@@ -164,14 +177,7 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
     #function
-    sucess = DoneTerm(
-        func=reach_joystick,
-        params={
-            "joystick_cfg": SceneEntityCfg("object"), 
-            "x_range": (0.5, 0.5),
-            "y_range": (0.5, 0.5), 
-            "height_threshold": 0.1}
-    )
+
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""

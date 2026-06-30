@@ -69,9 +69,6 @@ def _find_joystick_camera_space(
     d_min        = depth_masked.reshape(num_envs, -1).min(dim=-1).values
     centroid_valid = (d_at_centroid > 0.05) & (d_at_centroid < 10.0)
     d_joy = torch.where(centroid_valid, d_at_centroid, d_min)
-
-    print(f"u_joy={u_joy[0]:.1f} v_joy={v_joy[0]:.1f} d_joy={d_joy[0]:.3f}m")
-    print(f"blue pixels found: {blue_mask[0].sum().item()}")
  
     # Unproject to camera-space 3D
     fx = K[:, 0, 0];  fy = K[:, 1, 1]
@@ -189,7 +186,7 @@ def joystick_reach_reward(
     env: ManagerBasedRLEnv,
     std: float,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera_1"),
 ) -> torch.Tensor:
     
     camera : Camera = env.scene[camera_cfg.name]
@@ -202,13 +199,6 @@ def joystick_reach_reward(
     gripper_w   = _get_gripper_position_from_joints(env, ee_frame_cfg)
     joy_w = _camera_to_world_space(joy_cam, camera)
 
-    print(f"Detected joystick in camera space: {joy_cam[0]}")
-    print(f"Expected:                          (0.070, 0.020, 0.923)")
-    print(f"Camera pos: {camera.data.pos_w[0]}")
-
-    # After computing joy_w:
-    print(f"Recovered joystick world pos: {joy_w[0]}")
-    print(f"Expected:                     (0.377, 0.07, 0.08)")
     distance = (joy_w - gripper_w).norm(dim=-1)   # (N,)
     reward   = 1.0 - torch.tanh(distance / std)
 
@@ -219,7 +209,7 @@ def touch_joystick(
     env: ManagerBasedRLEnv,
     touch: float,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera_1"),
 ) -> torch.Tensor:
     
     camera: Camera = env.scene[camera_cfg.name]

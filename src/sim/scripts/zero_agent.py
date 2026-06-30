@@ -45,6 +45,7 @@ def main():
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
+
     # reset environment
     env.reset()
     # simulate environment
@@ -60,3 +61,8 @@ def main():
 
     # close the simulator
     env.close()
+if __name__ == "__main__":
+    # run the main function
+    main()
+    # close sim app
+    simulation_app.close()
