@@ -175,7 +175,7 @@ class Brain():
 
         print("Pick from the list which Agent you would like to evalute:")
         for i in range(len(options)):
-            print(f"{i+1}.{options[i].split("/")[0]}")
+            print(f"{i+1}.{options[i].split('/')[0]}")
         
 
         while True:

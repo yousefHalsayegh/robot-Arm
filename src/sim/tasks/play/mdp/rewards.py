@@ -186,7 +186,7 @@ def joystick_reach_reward(
     env: ManagerBasedRLEnv,
     std: float,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera_1"),
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("side"),
 ) -> torch.Tensor:
     
     camera : Camera = env.scene[camera_cfg.name]
@@ -209,7 +209,7 @@ def touch_joystick(
     env: ManagerBasedRLEnv,
     touch: float,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    camera_cfg: SceneEntityCfg = SceneEntityCfg("camera_1"),
+    camera_cfg: SceneEntityCfg = SceneEntityCfg("side"),
 ) -> torch.Tensor:
     
     camera: Camera = env.scene[camera_cfg.name]

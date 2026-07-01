@@ -34,7 +34,9 @@ import torch
 
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
+from sim.utils.Pong import PongScreen
 
+from ale.brain import Brain
 
 def main():
     """Zero actions agent with Isaac Lab environment."""
@@ -45,18 +47,36 @@ def main():
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
+    base_env = env.unwrapped
 
+    base_env.sim.step()
+    base_env.scene.update(base_env.sim.get_physics_dt())
+    from pxr import UsdShade
+    import isaacsim.core.utils.stage as stage_utils
+
+    stage  = stage_utils.get_current_stage()
+    shader = UsdShade.Shader.Get(stage, "/World/envs/env_0/screen/geometry/material/Shader")
+
+    print("shader id:", shader.GetShaderId())
+    for inp in shader.GetInputs():
+        print(" input:", inp.GetFullName(), "|", inp.GetTypeName())
+    # ── bind dynamic textures to screen prims ────────────────────────
+    pong = PongScreen(
+        num_envs=env_cfg.scene.num_envs,
+        env_prim_prefix="/World/envs/env_",
+        screen_relative_path="screen",
+        seed=42,
+    )
+    pong.setup()
     # reset environment
-    env.reset()
+    obs, _ = env.reset()
+    steps = 0
     # simulate environment
     while simulation_app.is_running():
         # run everything in inference mode
-        with torch.inference_mode():
-            # compute zero actions
-            actions = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-            # apply actions
-            env.step(actions)
-        
+       
+        env.step(0)
+    
             
 
     # close the simulator

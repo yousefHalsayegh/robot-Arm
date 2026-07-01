@@ -34,7 +34,7 @@ from isaaclab.sensors import CameraCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-
+from scipy.spatial.transform import Rotation
 ##check how to implement this 
 #from isaac_so_arm101.utils.domain_randomization import domain_randomization, randomize_object_uniform
 
@@ -43,6 +43,12 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 # Scene definition
 ##
 
+def rot_cal(x_deg, y_deg, z_deg):
+    target   = Rotation.from_euler('xyz', [x_deg, y_deg, z_deg], degrees=True)
+    offset   = Rotation.from_euler('xyz', [90, 90, 0], degrees=True)
+    result   = target * offset.inv()
+    x, y, z, w = result.as_quat()
+    return (w, x, y, z)
 
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
@@ -77,32 +83,47 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
+
+    screen = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/screen",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=[0.45, -0.12, 0.36],          
+            rot=[0.707, 0, 0, 0.707],      
+        ),
+        spawn=sim_utils.MeshCuboidCfg(
+            size=(0.51, 0.01, 0.29),      
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.0, 0.0, 0.0),   # black until texture binds
+            ),
+        ),
+    )
+
+
     #camera
-    camera_1 = CameraCfg(
-        prim_path = "{ENV_REGEX_NS}/camera_1",
+    side = CameraCfg(
+        prim_path = "{ENV_REGEX_NS}/side",
         update_period=0.1,
-        height=400,
-        width=400,
+        height=1280,
+        width=720,
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=15.0, focus_distance=200.0, horizontal_aperture=20.955, clipping_range=(0.1, 1.0e5)
+            focal_length=6.3562, focus_distance=28.0, horizontal_aperture=12.7, clipping_range=(0.1, 1.0e5)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(0.32268, 0.24807, 0.27), rot=(0, 0.0, 0, 0.1), convention="world"),
+        offset=CameraCfg.OffsetCfg(pos=(0.32268, 0.24807, 0.27), rot=(0.0, 0.0, 0.38268, 0.92388), convention="opengl"),
     )
+    
 
-    camera_2 = CameraCfg(
-        prim_path = "{ENV_REGEX_NS}/camera_2",
+    back = CameraCfg(
+        prim_path = "{ENV_REGEX_NS}/back",
         update_period=0.1,
-        height=400,
-        width=400,
+        height=640,
+        width=480,
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=15.0, focus_distance=200.0, horizontal_aperture=20.955, clipping_range=(0.1, 1.0e5)
+            focal_length=12.2622, focus_distance=19.0, horizontal_aperture=12.7, clipping_range=(0.1, 1.0e5)
         ),
-        offset=CameraCfg.OffsetCfg(pos=(-0.24, -0.12, 0.32), rot=(0, 0.0, 0, 0.1), convention="world"),
+        offset=CameraCfg.OffsetCfg(pos=(-0.24, -0.12, 0.38), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),
     )
-
-##
 # MDP settings
 ##
 
@@ -211,8 +232,6 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     rewards : RewardsCfg = RewardsCfg()
 
-    #TODO check a way for me to make this an arg so that I can pass what dataset I need 
-    task_description: str = "neutral"
 
     def __post_init__(self):
         """Post initialization."""

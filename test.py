@@ -1,12 +1,17 @@
-import gymnasium as gym
-import ale_py
+import pyrealsense2 as rs
 
-def main():
-    gym.register_envs(ale_py)
-    env = gym.make('ALE/Breakout-v5')
-    obs, info = env.reset()
-    obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
-    
+pipeline = rs.pipeline()
+config   = rs.config()
+config.enable_device("814412071258")   # D455 serial
+config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
 
-if __name__ == "__main__":
-    main()
+profile = pipeline.start(config)
+intr    = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+
+sensor_width_mm      = 12.7             # D455 1/2" sensor
+focal_length_mm      = (intr.fx / intr.width) * sensor_width_mm
+horizontal_aperture  = sensor_width_mm
+
+print(f"focal_length:        {focal_length_mm:.4f}")
+print(f"horizontal_aperture: {horizontal_aperture}")
+pipeline.stop()
