@@ -15,7 +15,7 @@ dependencies = [
 list_envs = "sim.scripts.list_envs:main"
 zero_agent = "sim.scripts.zero_agent:main"
 random_agent = "sim.scripts.random_agent:main"
-generate = "sim.scripts.generate:main"
+play = "sim.scripts.generate:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

@@ -330,7 +330,7 @@ def main():
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-test", "--testing", help="Reward Clipping", default=config.TESTING, type=int)
+    parser.add_argument("-test", "--testing", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
     
     args = parser.parse_args()
 
