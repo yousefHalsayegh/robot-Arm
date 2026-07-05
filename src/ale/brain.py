@@ -101,11 +101,12 @@ class Brain():
 
         #epsilon is used to add some randomnes to the enviroment, if epsilon is big it is more likely that the env choose a random action, otherwise it is computed by the network
         if random() < self.eps:
-            return env.action_space.sample()
+            sample = env.action_space.sample()
+            return int(sample[0]) if hasattr(sample, '__len__') else int(sample)
 
         with torch.no_grad():
-            state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
-            return self.policy(state_next).argmax(dim=1).item()
+            state_t = torch.FloatTensor(state).unsqueeze(0).to("cuda")
+            return self.policy(state_t).argmax(dim=1).item()
         
     def save_checkpoint(self, episode, steps, path="checkpoint"):
         """
