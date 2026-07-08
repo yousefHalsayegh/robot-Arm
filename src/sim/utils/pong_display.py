@@ -1,21 +1,3 @@
-"""
-pong_display.py
-
-Displays N ALE Pong environments in a single omni.ui window inside
-Isaac Sim, avoiding the SDL/GLX conflict from render_mode="human".
-
-Usage:
-    from pong_display import PongDisplay
-
-    display = PongDisplay(num_envs=4)
-
-    # in the loop after ale_envs[i].step()
-    frame = ale_envs[i].render()   # [210, 160, 3] uint8
-    display.update(i, frame)
-
-    # flush after all envs updated each step
-    simulation_app.update()
-"""
 
 import numpy as np
 

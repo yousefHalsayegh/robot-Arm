@@ -16,6 +16,7 @@ SO_ARM101_CFG = ArticulationCfg(
         replace_cylinders_with_capsules=True,
         asset_path=f"{TEMPLATE_ASSETS_DATA_DIR}/urdf/so_arm101.urdf",
         activate_contact_sensors=False, # set as false while waiting for capsule implementation
+        collider_type="convex_decomposition",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             max_depenetration_velocity=5.0,
@@ -33,10 +34,10 @@ SO_ARM101_CFG = ArticulationCfg(
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             "shoulder_pan": 0.0,
-            "shoulder_lift": 0.0,
-            "elbow_flex": -0.0,
-            "wrist_flex": 1.57,
-            "wrist_roll": -0.0,
+            "shoulder_lift": -1.7,
+            "elbow_flex": 1.6,
+            "wrist_flex": -1.5,
+            "wrist_roll": 1.6,
             "gripper": 0.0,
         },
         # Set initial joint velocities to zero
@@ -51,8 +52,8 @@ SO_ARM101_CFG = ArticulationCfg(
         # Jaw               moves: Only moving jaw              (~0.034kg)
         "arm": ImplicitActuatorCfg(
             joint_names_expr=["shoulder_.*", "elbow_flex", "wrist_.*"],
-            effort_limit_sim=1.9,
-            velocity_limit_sim=1.5,
+            effort_limit_sim=600.0,
+            velocity_limit_sim=500.0,
             stiffness={
                 "shoulder_pan": 200.0,  # Highest - moves all mass
                 "shoulder_lift": 170.0,  # Slightly less than rotation

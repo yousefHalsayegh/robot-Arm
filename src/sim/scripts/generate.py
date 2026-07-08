@@ -1,52 +1,29 @@
-"""
-game_sim.py
 
-Isaac Sim equivalent of game_rob.py.
-
-- Action gating: new action only when arm finishes previous one
-- Same fail_safe counter per env
-- ALE runs via SyncVectorEnv with AtariPreprocessing + FrameStack
-- obs used directly as state — no Frames or Eyes needed
-- Isaac Sim handles arm physics only — all articulation calls batched
-- Optional LeRobot dataset recording (-rec flag)
-- Optional per-episode colour randomisation (-cr flag)
-
-Run:
-    python game_sim.py --task <your_task> --num_envs 4 --job_name sim_run_1
-"""
-
-"""Launch Isaac Sim first."""
 import argparse
 from isaaclab.app import AppLauncher
+import ale.config as config
 
 parser = argparse.ArgumentParser("Isaac Sim DQN — Robot Arm Pong")
-parser.add_argument("--task",           type=str,   default=None)
-parser.add_argument("--num_envs",       type=int,   default=1)
+parser.add_argument("--task",type=str,default=None)
+parser.add_argument("--num_envs",type=int,default=1)
 parser.add_argument("--disable_fabric", action="store_true", default=False)
-parser.add_argument("-jn",  "--job_name",      type=str,   default="sim_run")
-parser.add_argument("-ep",  "--episode",       type=int,   default=5000)
-parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
-parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
-parser.add_argument("-lr",  "--learning_rate", type=float, default=0.0001)
-parser.add_argument("-wp",  "--warmup",        type=int,   default=10000)
-parser.add_argument("-b",   "--batch",         type=int,   default=128)
-parser.add_argument("-tau", "--tau",           type=float, default=0.005)
-parser.add_argument("-ee",  "--eps_end",       type=float, default=0.05)
-parser.add_argument("-es",  "--eps_start",     type=float, default=1.0)
-parser.add_argument("-ed",  "--eps_decay",     type=float, default=500000)
-parser.add_argument("-g",   "--gamma",         type=float, default=0.99)
-parser.add_argument("-c",   "--capacity",      type=float, default=100000)
-parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
-parser.add_argument("-rec", "--record",        default=False,
-                    action=argparse.BooleanOptionalAction,
-                    help="record LeRobot dataset alongside training")
-parser.add_argument("-cr",  "--colour_rand",   default=False,
-                    action=argparse.BooleanOptionalAction,
-                    help="randomise asset colours each episode")
-parser.add_argument("--arm_prim",   type=str, default="Robot")
-parser.add_argument("--stick_prim", type=str, default="object")
-parser.add_argument("--table_prim", type=str, default="Table")
-
+parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default="Sim")
+parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
+parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
+parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
+parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
+parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
+parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
+parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
+parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
+parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
+parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
+parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
+parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
+parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
+parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
+parser.add_argument("-rec", "--record", default=False, action=argparse.BooleanOptionalAction, help="record LeRobot dataset alongside training")
+parser.add_argument("-w", "--wandb", default=True, action=argparse.BooleanOptionalAction, help="record the info in wandb")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -62,7 +39,6 @@ import os
 import time
 import wandb
 from tqdm import tqdm
-
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 import isaacsim.core.utils.stage as stage_utils
@@ -72,8 +48,6 @@ from sim.utils.robot_sim import (
     RobotSim, POSITIONS,
     send_targets, batch_move_arms,
 )
-from sim.utils.lerobot_recorder import LeRobotRecorder
-from sim.utils.colour_tools import set_sim_colours, randomise_asset_colours, set_robot_colour, tint_arcade_stick
 from sim.utils.pong_display import PongDisplay
 
 import ale_py
@@ -105,6 +79,40 @@ def env_init(seed, rank):
         return env
     return _init
 
+def joystick_zone(object_art, env_index):
+    """Classify the joystick's CURRENT physical position into a zone,
+    independent of what task it's being driven toward. This is what the
+    game should actually see, moment to moment — same as a real controller."""
+    tilt_deg = np.rad2deg(object_art.data.joint_pos[env_index].cpu().numpy())  # [PivotY, PivotX]
+    axis_deg = tilt_deg[PIVOT_X_IDX]
+
+    if axis_deg < -DEADZONE_DEG:
+        return "up"
+    elif axis_deg > DEADZONE_DEG:
+        return "down"
+    return "neutral"
+
+
+ZONE_TO_ACT = {"up": 2, "down": 3, "neutral": 0}
+
+DEADZONE_DEG = 6.5 
+
+# joint order from your earlier print: ['PivotY', 'PivotX']
+PIVOT_Y_IDX = 0
+PIVOT_X_IDX = 1
+
+def joystick_registered(object_art, env_index, task):
+    tilt = object_art.data.joint_pos[env_index].cpu().numpy()  # [PivotY, PivotX], radians
+    tilt_deg = np.rad2deg(tilt)
+    if task == "neutral":
+        return np.abs(tilt_deg).max() < DEADZONE_DEG
+
+    axis_deg = tilt_deg[PIVOT_X_IDX]
+    if task == "up":
+        return axis_deg < -DEADZONE_DEG
+    elif task == "down":
+        return axis_deg > DEADZONE_DEG
+    return False
 
 def training(args, env, simulation_app):
     N        = args.num_envs
@@ -129,12 +137,13 @@ def training(args, env, simulation_app):
         os.makedirs(ckpt_dir, exist_ok=True)
         print("no checkpoint, starting fresh")
 
-    wandb.init(
-        project="RL for Games",
-        name=f"Sim-{args.job_name}",
-        config={k: v for k, v in vars(args).items()
-                if k not in {"job_name"}},
-    )
+    if args.wandb:
+        wandb.init(
+            project="RL for Games",
+            name=f"Sim-{args.job_name}",
+            config={k: v for k, v in vars(args).items()
+                    if k not in {"job_name"}},
+        )
 
     # ── ALE envs via SyncVectorEnv ────────────────────────────────
     # AtariPreprocessing + FrameStackObservation handle all preprocessing
@@ -152,40 +161,16 @@ def training(args, env, simulation_app):
 
     # ── articulation ──────────────────────────────────────────────
     so101  = base_env.scene["robot"]
+    object_art = base_env.scene["object"]
     robots = [RobotSim(env_index=i) for i in range(N)]
 
     def sim_step():
         base_env.sim.step()
         base_env.scene.update(base_env.sim.get_physics_dt())
         simulation_app.update()
-    # ── apply physical colours ────────────────────────────────────
-    # replace RGB values with output from: python colour_tools.py --sample
-    set_sim_colours(
-        stage      = stage,
-        num_envs   = N,
-        table_rgb  = (0.198, 0.161, 0.132),
-        table_prim = args.table_prim,
-    )
-
-    set_robot_colour(
-        stage=stage,
-        env_index = N,
-        r = 0.248,
-        g = 0.69,
-        b = 0.243
-    )
-    tint_arcade_stick(
-        stage= stage,
-        env_index=N
-    )
-    # ── recorder ─────────────────────────────────────────────────
-    recorder    = LeRobotRecorder(f"lerobot_dataset/{args.job_name}") \
-                  if args.record else None
-    frame_idxs  = np.zeros(N, dtype=int)
-    ep_start_ts = [time.time()] * N
 
     # ── move all arms to home ─────────────────────────────────────
-    batch_move_arms(so101, robots, sim_step, "home", device)
+    batch_move_arms(so101, robots, sim_step, "reset", device)
 
     # ── per-env tracking ──────────────────────────────────────────
     total_rewards = np.zeros(N)
@@ -195,45 +180,31 @@ def training(args, env, simulation_app):
     actions       = [{"all": 0, "up": 0, "down": 0, "neutral": 0}
                      for _ in range(N)]
     current_acts  = np.zeros(N, dtype=np.int64)
-    fail_safes    = np.zeros(N, dtype=int)
+    failsafe  = np.zeros(N, dtype=np.int64)
     loss, grad_norm = 0.0, 0.0
+    batch_move_arms(so101, robots, sim_step, "home", device)
+    batch_move_arms(so101, robots, sim_step, "neutral", device)
     try:
         with tqdm(total=args.episode, initial=start,
                   desc="Training", unit="ep") as pbar:
             while episode < (args.episode + 1):
-
+              
                 # ── action gating per env ─────────────────────────
                 for i in range(N):
                     robot    = robots[i]
-                    arm_done = robot.finished(so101)
-
-                    if (robot.prev == robot.action
-                            and robot.action == current_acts[i]) \
-                       or (fail_safes[i] >= 10 and not arm_done):
-
-                        # states[i] is [4, 84, 84] — pass directly
-                        act = brain.predict_next_action(
-                            states[i], steps, ale_envs
-                        )
-
+                    if joystick_registered(object_art, i, robot.task) or failsafe[i] > 200:
+                        act = brain.predict_next_action(states[i], steps, ale_envs)
                         if act in (2, 4):
-                            act              = 2
                             robot.task       = "up"
                             actions[i]["up"] += 1
                         elif act in (3, 5):
-                            act                = 3
                             robot.task         = "down"
                             actions[i]["down"] += 1
                         else:
-                            act                   = 0
                             robot.task            = "neutral"
                             actions[i]["neutral"] += 1
-
                         actions[i]["all"] += 1
-                        current_acts[i]    = act
-                        robot.action       = act
-                        robot.prev         = act
-                        fail_safes[i]      = 0
+                    current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
 
                 # ── batched arm command + sim step ────────────────
                 send_targets(so101, robots, device)
@@ -260,20 +231,6 @@ def training(args, env, simulation_app):
                     rew      = float(rew_batch[i])
                     next_s   = next_obs[i]   # [4, 84, 84] directly
 
-                    # record
-                    if recorder is not None:
-                        side_frame = base_env.scene["side"]\
-                            .data.output["rgb"][i].cpu().numpy()\
-                            .astype(np.uint8)
-                        recorder.record_step(
-                            joint_pos    = robots[i].get_joint_pos(so101),
-                            joint_target = POSITIONS[robots[i].task],
-                            side_frame   = side_frame,
-                            frame_index  = int(frame_idxs[i]),
-                            timestamp    = time.time() - ep_start_ts[i],
-                            done         = done_i,
-                        )
-                        frame_idxs[i] += 1
 
                     # reward + buffer
                     clipped = float(np.clip(np.sign(rew), -1, 1))
@@ -282,7 +239,7 @@ def training(args, env, simulation_app):
                         clipped, next_s, float(done_i)
                     )
                     total_rewards[i] += clipped
-                    fail_safes[i]    += 1
+                    failsafe[i] += 1
                     steps            += 1
 
                     # train
@@ -322,40 +279,28 @@ def training(args, env, simulation_app):
                             f"eta={format_time(eta)}",
                             flush=True,
                         )
+                        if args.wandb:
+                            wandb.log({
+                                "train/loss":          loss,
+                                "train/grad_norm":     grad_norm,
+                                "train/epsilon":       brain.eps,
+                                "train/buffer_size":   len(brain.buffer),
+                                "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
+                                "episode/total_reward":       total_rewards[i],
+                                "episode/RL_action_all":      actions[i]["all"],
+                                "episode/RL_actions_up":      actions[i]["up"],
+                                "episode/RL_actions_down":    actions[i]["down"],
+                                "episode/RL_actions_neutral": actions[i]["neutral"]
+                            }, step=steps)
 
-                        wandb.log({
-                            "train/loss":          loss,
-                            "train/grad_norm":     grad_norm,
-                            "train/epsilon":       brain.eps,
-                            "train/buffer_size":   len(brain.buffer),
-                            "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                            "episode/total_reward":       total_rewards[i],
-                            "episode/RL_action_all":      actions[i]["all"],
-                            "episode/RL_actions_up":      actions[i]["up"],
-                            "episode/RL_actions_down":    actions[i]["down"],
-                            "episode/RL_actions_neutral": actions[i]["neutral"],
-                            "episode/RB_action_all":      robots[i].actions["all"],
-                            "episode/RB_actions_up":      robots[i].actions["up"],
-                            "episode/RB_actions_down":    robots[i].actions["down"],
-                            "episode/RB_actions_neutral": robots[i].actions["neutral"],
-                        }, step=steps)
-
-                        # flush recorder
-                        if recorder is not None:
-                            recorder.end_episode()
-                            frame_idxs[i]  = 0
-                            ep_start_ts[i] = time.time()
 
                         # reset per-env trackers
                         total_rewards[i]  = 0.0
-                        robots[i].action  = 0
-                        robots[i].prev    = 0
                         robots[i].actions = {"all": 0, "up": 0,
                                              "down": 0, "neutral": 0}
                         actions[i]        = {"all": 0, "up": 0,
                                              "down": 0, "neutral": 0}
                         current_acts[i]   = 0
-                        fail_safes[i]     = 0
                         ep_times[i]       = time.time()
                         episode          += 1
 
@@ -363,55 +308,45 @@ def training(args, env, simulation_app):
                         # next_obs[i] is already the fresh reset obs
                         states[i] = next_obs[i]
 
-                        # colour randomisation
-                        if args.colour_rand:
-                            randomise_asset_colours(
-                                stage,
-                                env_index  = i,
-                                arm_prim   = args.arm_prim,
-                                stick_prim = args.stick_prim,
-                                table_prim = args.table_prim,
-                            )
 
                         robots[i].task = "neutral"
 
                     else:
                         states[i] = next_s
-
-                wandb.log({"train/steps": steps}, step=steps)
+                if args.wandb:
+                    wandb.log({"train/episode": episode}, step=steps)
 
     except KeyboardInterrupt:
         print("\nclosing")
-        if recorder is not None:
-            recorder.save()
         ale_envs.close()
-        wandb.finish()
+        if args.wandb:wandb.finish()
 
     except Exception as e:
         import traceback
         crash = traceback.format_exc()
         print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
         print(crash, flush=True)
-        if recorder is not None:
-            recorder.save()
-        wandb.log({
-            "crash/error_type":    type(e).__name__,
-            "crash/error_message": str(e),
-            "crash/traceback":     crash,
-            "crash/episode":       episode,
-            "crash/steps":         steps,
-        })
-        wandb.alert(
-            title=f"Sim crashed — {type(e).__name__}",
-            text=f"Episode {episode} | Steps {steps}\n\n{crash}",
-            level=wandb.AlertLevel.ERROR,
-        )
-        ale_envs.close()
-        wandb.finish(exit_code=1)
+        if args.wandb:
+            wandb.log({
+                "crash/error_type":    type(e).__name__,
+                "crash/error_message": str(e),
+                "crash/traceback":     crash,
+                "crash/episode":       episode,
+                "crash/steps":         steps,
+            })
+            wandb.alert(
+                title=f"Sim crashed — {type(e).__name__}",
+                text=f"Episode {episode} | Steps {steps}\n\n{crash}",
+                level=wandb.AlertLevel.ERROR,
+            )
+            ale_envs.close()
+            wandb.finish(exit_code=1)
         raise
 
 
 def main():
+
+
     env_cfg = parse_env_cfg(
         args_cli.task,
         device=args_cli.device,
@@ -425,8 +360,9 @@ def main():
 
     training(args_cli, env, simulation_app)
     env.close()
+    simulation_app.close()
 
 
 if __name__ == "__main__":
     main()
-    simulation_app.close()
+    

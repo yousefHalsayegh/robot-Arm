@@ -1,13 +1,3 @@
-"""
-robot_sim.py
-
-Isaac Sim equivalent of robot_noVla.py.
-Tracks per-env state (task, action, counters) but does NOT send commands
-directly — all articulation calls are batched in game_sim.py.
-
-Joint order matches SO101 USD:
-    [shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll, gripper]
-"""
 
 import numpy as np
 import torch
@@ -24,47 +14,57 @@ JOINT_NAMES = [
 # exact values from positions.json converted to radians
 POSITIONS = {
     "home": np.array([
-        -8.175824175824175,
-        16.175824175824175,
-        50.46153846153846,
-        -75.38461538461539,
-        -89.97802197802197,
-        60.07731958762886,
-    ], dtype=np.float32),
-
-    "neutral": np.array([
-        -7.1208791208791204,
-        16.615384615384617,
-        51.51648351648352,
-        -75.38461538461539,
-        -89.97802197802197,
-        15.811855670103093,
-    ], dtype=np.float32),
-
-    "up": np.array([
-        -7.1208791208791204,
-        20.395604395604394,
-        20.92307692307692,
-        -75.38461538461539,
-        -89.62637362637362,
-        15.811855670103093,
+        2.5,  # shoulder_pan
+        12,  # shoulder_lift
+        53.0,  # elbow_flex
+        -63.0,  # wrist_flex
+        91.0,  # wrist_roll
+        38.717498779296875,  # gripper
     ], dtype=np.float32),
 
     "down": np.array([
-        100.208791208791209,
-        100.516483516483516,
-        100.03296703296704,
-        -75.20879120879121,
-        -89.97802197802197,
-        15.811855670103093,
+        2.5,  # shoulder_pan
+        10,  # shoulder_lift
+        62.0,  # elbow_flex
+        -72.0,  # wrist_flex
+        91.0,  # wrist_roll
+        9.05,  # gripper
     ], dtype=np.float32),
+
+    "up": np.array([
+        2.5,  # shoulder_pan
+        13,  # shoulder_lift
+        46.0,  # elbow_flex
+        -56.0,  # wrist_flex
+        91.0,  # wrist_roll
+        9.05,  # gripper
+    ], dtype=np.float32),
+
+    "neutral": np.array([
+        2.5,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -62.0,  # wrist_flex
+        91.0,  # wrist_roll
+        9.05,  # gripper
+    ], dtype=np.float32),
+
+    "reset": np.array([
+        1.0,                  # shoulder_pan
+        -97.40282517223994,   # shoulder_lift
+        91.67324722093173,    # elbow_flex
+        -85.94366926962348,   # wrist_flex
+        91.67324722093173,    # wrist_roll
+        0.0,                  # gripper
+    ], dtype=np.float32),
+
 }
 
 for k in POSITIONS:
     POSITIONS[k] = np.deg2rad(POSITIONS[k])
 
 # equivalent to error < 3 degrees on the physical arm
-ARRIVAL_THRESHOLD = np.deg2rad(3.0)
+ARRIVAL_THRESHOLD = np.deg2rad(1.5)
 
 
 class RobotSim:
@@ -76,19 +76,38 @@ class RobotSim:
     def __init__(self, env_index: int):
         self.env_index = env_index
         self.task      = "neutral"
-        self.action    = 0
-        self.prev      = 0
         self.reseting  = False
         self.actions   = {"all": 0, "neutral": 0, "up": 0, "down": 0}
+        self.moving      = False   # True while transitioning to a newly-decided action
+        self.pending_act = 0 
 
-    def finished(self, articulation) -> bool:
+    def finished(self, articulation, max_steps=100) -> bool:
         """
         True when arm has reached current task target.
         Equivalent to error < 3 check in robot_noVla.py.
         """
         current = articulation.data.joint_pos[self.env_index].cpu().numpy()
         target  = POSITIONS[self.task]
-        return float(np.abs(current - target).max()) < ARRIVAL_THRESHOLD
+        per_joint_error = np.abs(current - target)
+        error = float(per_joint_error.max())
+
+        if error < ARRIVAL_THRESHOLD:
+            self._step_count = 0  # reset for next task
+            return True
+
+        if max_steps is not None:
+            self._step_count = getattr(self, "_step_count", 0) + 1
+            if self._step_count > max_steps:
+                joint_names = articulation.joint_names
+                still_over = [
+                    (joint_names[j], float(per_joint_error[j]))
+                    for j in range(len(joint_names))
+                    if per_joint_error[j] >= ARRIVAL_THRESHOLD
+                ]
+                print(f"[env {self.env_index}] task '{self.task}' not reached after "
+                      f"{max_steps} steps — joints still over threshold: {still_over}")
+
+        return False
 
     def get_joint_pos(self, articulation) -> np.ndarray:
         """Current joint positions for this env."""
@@ -127,11 +146,12 @@ def batch_move_arms(articulation, robots, sim_step_fn,
     target_t  = torch.tensor(POSITIONS[target_name], dtype=torch.float32)
     targets   = target_t.unsqueeze(0).repeat(N, 1).to(device)
     confirmed = np.zeros(N, dtype=int)
+    joint_names = articulation.joint_names
 
     for robot in robots:
         robot.reseting = True
         robot.task     = target_name
-
+    print("moving ", target_name)
     for _ in range(n_steps):
         articulation.set_joint_position_target(targets)
         articulation.write_data_to_sim()
@@ -139,14 +159,27 @@ def batch_move_arms(articulation, robots, sim_step_fn,
 
         for i, robot in enumerate(robots):
             current = articulation.data.joint_pos[i].cpu().numpy()
-            error   = np.abs(current - POSITIONS[target_name]).max()
+            per_joint_error   = np.abs(current - POSITIONS[target_name]).max()
+            error      = per_joint_error.max()
+
             if error < ARRIVAL_THRESHOLD:
+                
                 confirmed[i] += 1
             else:
                 confirmed[i] = 0
-
+        
         if (confirmed >= 5).all():
             break
+    for i, robot in enumerate(robots):
+        current = articulation.data.joint_pos[i].cpu().numpy()
+        per_joint_error = np.abs(current - POSITIONS[target_name])
+        still_over = [
+            (joint_names[j], float(per_joint_error[j]))
+            for j in range(len(joint_names))
+            if per_joint_error[j] >= ARRIVAL_THRESHOLD
+        ]
+        if still_over:
+            print(f"robot {i} — joints still not under threshold: {still_over}")
 
     for robot in robots:
         robot.reseting = False
