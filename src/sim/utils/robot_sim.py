@@ -185,3 +185,37 @@ def batch_move_arms(articulation, robots, sim_step_fn,
         robot.reseting = False
         robot.action   = 0
         robot.prev     = 0
+
+def batch_move_arm(articulation, robot, sim_step_fn,
+                    target_name: str, device, n_steps: int = 200):
+    
+    target_t  = torch.tensor(POSITIONS[target_name], dtype=torch.float32)
+    targets   = target_t.unsqueeze(0).to(device)
+    confirmed = 0
+    joint_names = articulation.joint_names
+
+    robot.reseting = True
+    robot.task     = target_name
+
+    for _ in range(n_steps):
+        articulation.set_joint_position_target(targets)
+        articulation.write_data_to_sim()
+        sim_step_fn()
+
+        current = articulation.data.joint_pos.cpu().numpy()
+        per_joint_error   = np.abs(current - POSITIONS[target_name]).max()
+        error      = per_joint_error.max()
+
+        if error < ARRIVAL_THRESHOLD:
+            
+            confirmed += 1
+        else:
+            confirmed = 0
+        
+        if (confirmed >= 5):
+            break
+
+
+    robot.reseting = False
+    robot.action   = 0
+    robot.prev     = 0

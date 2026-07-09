@@ -47,6 +47,7 @@ from ale.brain import Brain
 from sim.utils.robot_sim import (
     RobotSim, POSITIONS,
     send_targets, batch_move_arms,
+    batch_move_arm,
 )
 from sim.utils.pong_display import PongDisplay
 
@@ -181,6 +182,7 @@ def training(args, env, simulation_app):
                      for _ in range(N)]
     current_acts  = np.zeros(N, dtype=np.int64)
     failsafe  = np.zeros(N, dtype=np.int64)
+    failsafe_Count  = np.zeros(N, dtype=np.int64)
     loss, grad_norm = 0.0, 0.0
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
@@ -188,11 +190,13 @@ def training(args, env, simulation_app):
         with tqdm(total=args.episode, initial=start,
                   desc="Training", unit="ep") as pbar:
             while episode < (args.episode + 1):
-              
+                
                 # ── action gating per env ─────────────────────────
                 for i in range(N):
                     robot    = robots[i]
-                    if joystick_registered(object_art, i, robot.task) or failsafe[i] > 200:
+                    if failsafe[i] > 50:
+                        failsafe_Count[i] += 1
+                    if joystick_registered(object_art, i, robot.task) or failsafe[i] > 50:
                         act = brain.predict_next_action(states[i], steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
@@ -204,6 +208,7 @@ def training(args, env, simulation_app):
                             robot.task            = "neutral"
                             actions[i]["neutral"] += 1
                         actions[i]["all"] += 1
+                        failsafe[i] =0
                     current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
 
                 # ── batched arm command + sim step ────────────────
@@ -249,6 +254,7 @@ def training(args, env, simulation_app):
 
                     # ── episode end ───────────────────────────────
                     if done_i:
+                        batch_move_arm(so101, robots[i], sim_step, "neutral", device)
                         ep_time = time.time() - ep_times[i]
                         episode_time.append(ep_time)
                         eta = np.mean(episode_time[-100:]) * \
@@ -286,11 +292,13 @@ def training(args, env, simulation_app):
                                 "train/epsilon":       brain.eps,
                                 "train/buffer_size":   len(brain.buffer),
                                 "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
+                                "train/episode": episode,
                                 "episode/total_reward":       total_rewards[i],
                                 "episode/RL_action_all":      actions[i]["all"],
                                 "episode/RL_actions_up":      actions[i]["up"],
                                 "episode/RL_actions_down":    actions[i]["down"],
-                                "episode/RL_actions_neutral": actions[i]["neutral"]
+                                "episode/RL_actions_neutral": actions[i]["neutral"],
+                                "episode/flushed": failsafe_Count[i]
                             }, step=steps)
 
 
@@ -307,14 +315,14 @@ def training(args, env, simulation_app):
                         # SyncVectorEnv auto-resets done envs
                         # next_obs[i] is already the fresh reset obs
                         states[i] = next_obs[i]
+                        failsafe_Count[i] = 0
 
 
                         robots[i].task = "neutral"
 
                     else:
                         states[i] = next_s
-                if args.wandb:
-                    wandb.log({"train/episode": episode}, step=steps)
+
 
     except KeyboardInterrupt:
         print("\nclosing")
