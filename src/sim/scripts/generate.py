@@ -248,9 +248,8 @@ def training(args, env, simulation_app):
                     steps            += 1
 
                     # train
-                    result = brain.train()
-                    if result is not None:
-                        loss, grad_norm = result
+                    for _ in range(args.updates):
+                        loss, grad_norm = brain.train()
 
                     # ── episode end ───────────────────────────────
                     if done_i:
