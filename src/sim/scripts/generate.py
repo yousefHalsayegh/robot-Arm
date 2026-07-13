@@ -181,9 +181,11 @@ def training(args, env, simulation_app):
     actions       = [{"all": 0, "up": 0, "down": 0, "neutral": 0}
                      for _ in range(N)]
     current_acts  = np.zeros(N, dtype=np.int64)
-    failsafe  = np.zeros(N, dtype=np.int64)
     failsafe_Count  = np.zeros(N, dtype=np.int64)
+    failsafe  = np.zeros(N, dtype=np.int64)
     loss, grad_norm = 0.0, 0.0
+    decision_states = states
+    pending_reward = np.zeros(N, dtype=np.int64)
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
     try:
@@ -194,9 +196,26 @@ def training(args, env, simulation_app):
                 # ── action gating per env ─────────────────────────
                 for i in range(N):
                     robot    = robots[i]
-                    if failsafe[i] > 50:
+                    joystick_input = joystick_registered(object_art, i, robot.task)
+                    timeout = failsafe[i] > 50
+                    # if joystick_input:
+                    #     print(f"env {i} registered at failsafe={failsafe[i]}", flush=True)
+                    if timeout:
                         failsafe_Count[i] += 1
-                    if joystick_registered(object_art, i, robot.task) or failsafe[i] > 50:
+                    if joystick_input or timeout:
+
+                        clipped_r = float(np.clip(pending_reward[i], -1, 1))
+                        brain.buffer.push(
+                            decision_states[i], int(current_acts[i]),
+                            clipped_r, states[i], False
+                        )
+                        total_rewards[i] += clipped_r
+                        steps            += 1
+                        pending_reward[i] = 0
+
+                        for _ in range(args.updates):
+                            loss, grad_norm = brain.train()
+
                         act = brain.predict_next_action(states[i], steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
@@ -209,7 +228,9 @@ def training(args, env, simulation_app):
                             actions[i]["neutral"] += 1
                         actions[i]["all"] += 1
                         failsafe[i] =0
+                        decision_states[i] = states[i].copy()
                     current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
+                    failsafe += 1
 
                 # ── batched arm command + sim step ────────────────
                 send_targets(so101, robots, device)
@@ -234,25 +255,22 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     done_i   = bool(dones_batch[i])
                     rew      = float(rew_batch[i])
-                    next_s   = next_obs[i]   # [4, 84, 84] directly
-
-
-                    # reward + buffer
-                    clipped = float(np.clip(np.sign(rew), -1, 1))
-                    brain.buffer.push(
-                        states[i], int(current_acts[i]),
-                        clipped, next_s, float(done_i)
-                    )
-                    total_rewards[i] += clipped
-                    failsafe[i] += 1
-                    steps            += 1
-
-                    # train
-                    for _ in range(args.updates):
-                        loss, grad_norm = brain.train()
-
+                    pending_reward[i] += float(np.clip(np.sign(rew), -1, 1))
                     # ── episode end ───────────────────────────────
                     if done_i:
+                        # reward + buffer
+                        clipped_r = float(np.clip(pending_reward[i], -1, 1))
+                        brain.buffer.push(
+                            decision_states[i], int(current_acts[i]),
+                            clipped_r, next_obs[i], True
+                        )
+                        total_rewards[i] += clipped_r
+                        steps            += 1
+
+                        # train
+                        for _ in range(args.updates):
+                            loss, grad_norm = brain.train()
+                            
                         batch_move_arm(so101, robots[i], sim_step, "neutral", device)
                         ep_time = time.time() - ep_times[i]
                         episode_time.append(ep_time)
@@ -315,12 +333,12 @@ def training(args, env, simulation_app):
                         # next_obs[i] is already the fresh reset obs
                         states[i] = next_obs[i]
                         failsafe_Count[i] = 0
-
+                        decision_states[i] = next_obs[i].copy()
 
                         robots[i].task = "neutral"
 
                     else:
-                        states[i] = next_s
+                        states[i] = next_obs[i]
 
 
     except KeyboardInterrupt:
