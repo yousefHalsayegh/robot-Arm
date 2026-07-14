@@ -8,7 +8,7 @@ import torch.optim as optim
 from random import random, sample
 from collections import namedtuple, deque
 import os
-Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done'])
+Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'done', 'n'])
 
 class Brain():
     """
@@ -53,13 +53,15 @@ class Brain():
        rewards = torch.FloatTensor(np.array([t.reward      for t in batch])).to("cuda")
        next_states = torch.FloatTensor(np.array([t.next_state      for t in batch])).to("cuda")
        dones = torch.FloatTensor(np.array([t.done      for t in batch])).to("cuda")
+       steps = torch.FloatTensor(np.array([t.n      for t in batch])).to("cuda")
        
        #calculating the Q_Values of the collected states
        q_values = self.policy(states).gather(1, actions.unsqueeze(1)).squeeze(1)
        with torch.no_grad():
            #calculating the approximate next Q_values and the target
-           next_q = self.test(next_states).max(1)[0]
-           targets = rewards +self.gamma* next_q * (1 - dones)
+           next_actions = self.policy(next_states).argmax(1, keepdim=True)
+           next_q = self.test(next_states).gather(1, next_actions).squeeze(1)
+           targets = rewards +(self.gamma**steps)* next_q * (1 - dones)
 
 
         #calculating the loss and passing it backward
@@ -225,7 +227,7 @@ class Network(nn.Module):
         return self.fc(self.conv(input))
     
 class ReplayBuffer:
-
+    #TODO check with the current add, but see later the weighted replay buffer
     """
     Used to save observations for the CNN and then sampled from for training purposes 
     """

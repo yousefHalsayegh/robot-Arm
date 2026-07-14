@@ -1,3 +1,4 @@
+from kivy.uix.filechooser import string_types
 
 import argparse
 from isaaclab.app import AppLauncher
@@ -42,7 +43,7 @@ from tqdm import tqdm
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 import isaacsim.core.utils.stage as stage_utils
-
+import cv2
 from ale.brain import Brain
 from sim.utils.robot_sim import (
     RobotSim, POSITIONS,
@@ -53,6 +54,24 @@ from sim.utils.pong_display import PongDisplay
 
 import ale_py
 gym.register_envs(ale_py)
+
+def predict(ale_env, c_frames, c_action,T ):
+    save = ale_env.ale.cloneState()
+
+    predict_frame = list(c_frames)
+
+    for _ in range(T):
+        ale_env.step(c_action)
+
+        frame = ale_env.ale.getScreenGrayscale().astype(np.float32) / 255.0
+        frame = cv2.resize(frame, (84, 84))
+
+        predict_frame.pop(0)
+        predict_frame.append(frame)
+
+    ale_env.ale.restoreState(save)
+
+    return np.stack(predict_frame, axis=0)
 
 
 def format_time(seconds):
@@ -197,7 +216,7 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     robot    = robots[i]
                     joystick_input = joystick_registered(object_art, i, robot.task)
-                    timeout = failsafe[i] > 50
+                    timeout = failsafe[i] > 60
                     # if joystick_input:
                     #     print(f"env {i} registered at failsafe={failsafe[i]}", flush=True)
                     if timeout:
@@ -216,6 +235,7 @@ def training(args, env, simulation_app):
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
 
+                        predict(ale_envs[i].unwrapped, list(states[i]), int(current_acts[i]), 50)
                         act = brain.predict_next_action(states[i], steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
@@ -255,11 +275,11 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     done_i   = bool(dones_batch[i])
                     rew      = float(rew_batch[i])
-                    pending_reward[i] += float(np.clip(np.sign(rew), -1, 1))
+                    clipped_r = float(np.clip(np.sign(rew), -1, 1))
+                    pending_reward[i] += (brain.gamma ** failsafe[i]) * clipped_r
                     # ── episode end ───────────────────────────────
                     if done_i:
                         # reward + buffer
-                        clipped_r = float(np.clip(pending_reward[i], -1, 1))
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
                             clipped_r, next_obs[i], True
@@ -311,6 +331,7 @@ def training(args, env, simulation_app):
                                 "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
                                 "train/episode": episode,
                                 "episode/total_reward":       total_rewards[i],
+                                "episode/pending_reward":       pending_reward[i],
                                 "episode/RL_action_all":      actions[i]["all"],
                                 "episode/RL_actions_up":      actions[i]["up"],
                                 "episode/RL_actions_down":    actions[i]["down"],
