@@ -226,7 +226,7 @@ def training(args, env, simulation_app):
                         clipped_r = float(np.clip(pending_reward[i], -1, 1))
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
-                            clipped_r, states[i], False
+                            clipped_r, states[i], False, failsafe[i]
                         )
                         total_rewards[i] += clipped_r
                         steps            += 1
@@ -282,7 +282,7 @@ def training(args, env, simulation_app):
                         # reward + buffer
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
-                            clipped_r, next_obs[i], True
+                            clipped_r, next_obs[i], True, failsafe[i]
                         )
                         total_rewards[i] += clipped_r
                         steps            += 1
