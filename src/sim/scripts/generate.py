@@ -216,27 +216,27 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     robot    = robots[i]
                     joystick_input = joystick_registered(object_art, i, robot.task)
-                    timeout = failsafe[i] > 60
-                    # if joystick_input:
-                    #     print(f"env {i} registered at failsafe={failsafe[i]}", flush=True)
+                    timeout = failsafe[i] > 40
+
                     if timeout:
                         failsafe_Count[i] += 1
                     if joystick_input or timeout:
-
+                     
                         clipped_r = float(np.clip(pending_reward[i], -1, 1))
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
                             clipped_r, states[i], False, failsafe[i]
                         )
+                        
+
                         total_rewards[i] += clipped_r
                         steps            += 1
                         pending_reward[i] = 0
 
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
-
-                        predict(ale_envs.envs[i].unwrapped, list(states[i]), int(current_acts[i]), 50)
-                        act = brain.predict_next_action(states[i], steps, ale_envs)
+                        prediction = predict(ale_envs.envs[i].unwrapped, list(states[i]), int(current_acts[i]), 30)
+                        act = brain.predict_next_action(prediction, steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
                             actions[i]["up"] += 1
@@ -276,8 +276,29 @@ def training(args, env, simulation_app):
                     done_i   = bool(dones_batch[i])
                     rew      = float(rew_batch[i])
                     clipped_r = float(np.clip(np.sign(rew), -1, 1))
+                    #tracking
+                    ball_y, paddle_y = brain.ball_position(states[i][-1])
+                    if ball_y is not None and paddle_y is not None:
+                        prev_ball_y, prev_paddle_y = brain.ball_position(decision_states[i][-1])
+                        if prev_ball_y is not None and prev_paddle_y is not None:
+                            new_distance  = abs(ball_y  - paddle_y)
+                            prev_distance = abs(prev_ball_y - prev_paddle_y)
+                            if new_distance < prev_distance:
+                                clipped_r += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                            elif new_distance > prev_distance:
+                                clipped_r -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                        
                     pending_reward[i] += (brain.gamma ** failsafe[i]) * clipped_r
+                    # print("pending reward ", pending_reward[i])
                     # ── episode end ───────────────────────────────
+                    if steps % 200 == 0:
+                            priorities = brain.buffer.priorities[:len(brain.buffer)]
+                            wandb.log({
+                                "buffer/priority_max":  priorities.max(),
+                                "buffer/priority_min":  priorities.min(),
+                                "buffer/priority_mean": priorities.mean(),
+                                "buffer/priority_std":  priorities.std(),
+                            }, step=steps)
                     if done_i:
                         # reward + buffer
                         brain.buffer.push(
@@ -322,6 +343,7 @@ def training(args, env, simulation_app):
                             f"eta={format_time(eta)}",
                             flush=True,
                         )
+                        
                         if args.wandb:
                             wandb.log({
                                 "train/loss":          loss,
@@ -336,7 +358,7 @@ def training(args, env, simulation_app):
                                 "episode/RL_actions_up":      actions[i]["up"],
                                 "episode/RL_actions_down":    actions[i]["down"],
                                 "episode/RL_actions_neutral": actions[i]["neutral"],
-                                "episode/flushed": failsafe_Count[i]
+                                "episode/failsafe": failsafe_Count[i]
                             }, step=steps)
 
 
@@ -388,6 +410,9 @@ def training(args, env, simulation_app):
             ale_envs.close()
             wandb.finish(exit_code=1)
         raise
+
+    if args.wandb:wandb.finish()
+    ale_envs.close()
 
 
 def main():

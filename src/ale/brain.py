@@ -47,7 +47,7 @@ class Brain():
            return 0, 0
     
         #sampling different observations from the collected data
-       batch = self.buffer.sample(self.batch)
+       batch, indices, weights = self.buffer.sample(self.batch)
        states = torch.FloatTensor(np.array([t.state      for t in batch])).to("cuda")
        actions = torch.LongTensor(np.array([t.action      for t in batch])).to("cuda")
        rewards = torch.FloatTensor(np.array([t.reward      for t in batch])).to("cuda")
@@ -62,15 +62,18 @@ class Brain():
            next_actions = self.policy(next_states).argmax(1, keepdim=True)
            next_q = self.test(next_states).gather(1, next_actions).squeeze(1)
            targets = rewards +(self.gamma**steps)* next_q * (1 - dones)
-
+        
+        
 
         #calculating the loss and passing it backward
-       loss = self.loss_fn(q_values, targets)
+       loss = (weights * self.loss_fn(q_values, targets)).mean()
+       td_errors = (targets - q_values).detach().cpu().numpy()
        self.optimiser.zero_grad()
        loss.backward()
        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
        self.optimiser.step()
        self.soft_update()
+       self.buffer.update_priorities(indices, td_errors)
 
         #calculating the grad_norm for measuring the overall performace 
        grad_norm = sum(
@@ -231,14 +234,45 @@ class ReplayBuffer:
     """
     Used to save observations for the CNN and then sampled from for training purposes 
     """
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
+    def __init__(self, capacity, alpha=0.6, beta=0.4):
+        self.capacity  = int(capacity)
+        self.alpha     = alpha
+        self.beta      = beta
+        self.buffer    = []
+        self.priorities = np.zeros(int(capacity), dtype=np.float32)
+        self.pos       = 0
 
     def push(self, *args):
-        self.buffer.append(Transition(*args))
+        # new transitions get max priority so they are sampled at least once
+        max_priority = self.priorities.max() if self.buffer else 1.0
+        
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(Transition(*args))
+        else:
+            self.buffer[self.pos] = Transition(*args)
+        
+        self.priorities[self.pos] = max_priority
+        self.pos = (self.pos + 1) % self.capacity
 
     def sample(self, batch_size):
-        return sample(self.buffer, batch_size)
+        n           = len(self.buffer)
+        priorities  = self.priorities[:n]
+        probs       = priorities ** self.alpha
+        probs      /= probs.sum()
+        
+        indices     = np.random.choice(n, batch_size, replace=False, p=probs)
+        samples     = [self.buffer[i] for i in indices]
+        
+        # importance sampling weights — correct for sampling bias
+        weights     = (n * probs[indices]) ** (-self.beta)
+        weights    /= weights.max()
+        
+        return samples, indices, torch.FloatTensor(weights).to("cuda")
+
+    def update_priorities(self, indices, td_errors):
+        """Call after train() with the computed TD errors."""
+        for i, err in zip(indices, td_errors):
+            self.priorities[i] = abs(err) + 1e-6   # small epsilon avoids zero priority
 
     def __len__(self):
         return len(self.buffer)
