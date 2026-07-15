@@ -55,22 +55,24 @@ from sim.utils.pong_display import PongDisplay
 import ale_py
 gym.register_envs(ale_py)
 
-def predict(ale_env, c_frames, c_action,T ):
-    save = ale_env.ale.cloneState()
-
+def predict(ale_env_wrapped, c_frames, c_action, T):
+    # get inner ALE for state save/restore
+    inner = ale_env_wrapped
+    while hasattr(inner, 'env'):
+        inner = inner.env
+    
+    saved = inner.ale.cloneState()
     predict_frame = list(c_frames)
 
     for _ in range(T):
-        ale_env.step(c_action)
-
-        frame = ale_env.ale.getScreenGrayscale().astype(np.float32) / 255.0
-        frame = cv2.resize(frame, (84, 84))
-
+        obs, _, term, trunc, _ = ale_env_wrapped.step(c_action)
+        if term or trunc:
+            break
+        # obs is [4, 84, 84] from FrameStackObservation — take last frame
         predict_frame.pop(0)
-        predict_frame.append(frame)
+        predict_frame.append(obs[-1])
 
-    ale_env.ale.restoreState(save)
-
+    inner.ale.restoreState(saved)
     return np.stack(predict_frame, axis=0)
 
 
@@ -203,8 +205,8 @@ def training(args, env, simulation_app):
     failsafe_Count  = np.zeros(N, dtype=np.int64)
     failsafe  = np.zeros(N, dtype=np.int64)
     loss, grad_norm = 0.0, 0.0
-    decision_states = states
-    pending_reward = np.zeros(N, dtype=np.int64)
+    decision_states = states.copy()
+    pending_reward = np.zeros(N, dtype=np.float64)
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
     try:
@@ -216,26 +218,35 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     robot    = robots[i]
                     joystick_input = joystick_registered(object_art, i, robot.task)
-                    timeout = failsafe[i] > 40
+                    timeout = failsafe[i] > 60
 
                     if timeout:
                         failsafe_Count[i] += 1
                     if joystick_input or timeout:
                      
                         clipped_r = float(np.clip(pending_reward[i], -1, 1))
+                        
+                        ball_y, paddle_y = brain.ball_position(states[i][-1])
+                        if ball_y is not None and paddle_y is not None:
+                            prev_ball_y, prev_paddle_y = brain.ball_position(decision_states[i][-1])
+                            if prev_ball_y is not None and prev_paddle_y is not None:
+                                new_distance  = abs(ball_y  - paddle_y)
+                                prev_distance = abs(prev_ball_y - prev_paddle_y)
+                                if new_distance < prev_distance:
+                                    clipped_r += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                elif new_distance > prev_distance:
+                                    clipped_r -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
                             clipped_r, states[i], False, failsafe[i]
                         )
-                        
-
                         total_rewards[i] += clipped_r
                         steps            += 1
                         pending_reward[i] = 0
 
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
-                        prediction = predict(ale_envs.envs[i].unwrapped, list(states[i]), int(current_acts[i]), 30)
+                        prediction = predict(ale_envs.envs[i], list(states[i]), int(current_acts[i]), failsafe[i])
                         act = brain.predict_next_action(prediction, steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
@@ -250,7 +261,7 @@ def training(args, env, simulation_app):
                         failsafe[i] =0
                         decision_states[i] = states[i].copy()
                     current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
-                    failsafe += 1
+                    failsafe[i] += 1
 
                 # ── batched arm command + sim step ────────────────
                 send_targets(so101, robots, device)
