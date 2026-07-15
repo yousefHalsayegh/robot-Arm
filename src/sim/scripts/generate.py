@@ -235,7 +235,7 @@ def training(args, env, simulation_app):
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
 
-                        predict(ale_envs[i].unwrapped, list(states[i]), int(current_acts[i]), 50)
+                        predict(ale_envs.envs[i].unwrapped, list(states[i]), int(current_acts[i]), 50)
                         act = brain.predict_next_action(states[i], steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
