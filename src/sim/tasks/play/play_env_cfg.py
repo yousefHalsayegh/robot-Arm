@@ -85,18 +85,6 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     )
 
 
-    #camera
-    # side = CameraCfg(
-    #     prim_path = "{ENV_REGEX_NS}/side",
-    #     update_period=0.1,
-    #     height=1280,
-    #     width=720,
-    #     data_types=["rgb", "distance_to_image_plane"],
-    #     spawn=sim_utils.PinholeCameraCfg(
-    #         focal_length=6.3562, focus_distance=28.0, horizontal_aperture=12.7, clipping_range=(0.1, 1.0e5)
-    #     ),
-    #     offset=CameraCfg.OffsetCfg(pos=(0.32268, 0.24807, 0.27), rot=(0.0, 0.0, 0.38268, 0.92388), convention="opengl"),
-    # )
     
 # MDP settings
 ##
