@@ -238,7 +238,7 @@ def training(args, env, simulation_app):
                                     track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
                                 elif new_distance > prev_distance:
                                     track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                        clipped_r =float(np.clip((temp+track), -1, 1))
+                        clipped_r =float(np.clip((temp*2+track), -2, 2))
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
                             clipped_r, states[i], False, failsafe[i]
@@ -303,7 +303,7 @@ def training(args, env, simulation_app):
                                 track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
                             elif new_distance > prev_distance:
                                 track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                    clipped_r = float(np.clip(np.sign(rew+track), -1, 1))
+                    clipped_r = float(np.clip(np.sign(rew*2+track), -2, 2))
                     tracking_reward[i] += track
                     pending_reward[i] += (brain.gamma ** failsafe[i]) * clipped_r
                     # print("pending reward ", pending_reward[i])
@@ -340,7 +340,7 @@ def training(args, env, simulation_app):
                                 episode, steps, f"Sim-{args.job_name}"
                             )
                         if episode % args.full_save == 0 and episode != 0:
-                            brain.save()
+                            brain.save(f"Sim-{args.job_name}")
 
                         pbar.set_postfix({
                             "env":    i,
