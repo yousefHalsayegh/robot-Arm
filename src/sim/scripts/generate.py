@@ -24,6 +24,7 @@ parser.add_argument("-g", "--gamma", help="This helps with the discounted rate o
 parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
 parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
 parser.add_argument("-rec", "--record", default=False, action=argparse.BooleanOptionalAction, help="record LeRobot dataset alongside training")
+parser.add_argument("-f", "--frames", default=60, type=int, help="the framerate of the game")
 parser.add_argument("-w", "--wandb", default=True, action=argparse.BooleanOptionalAction, help="record the info in wandb")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -87,11 +88,11 @@ def format_time(seconds):
 def env_init(seed, rank):
     """Factory function for SyncVectorEnv."""
     def _init():
-        env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
+        env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array", repeat_action_probability=0)
         env = gym.wrappers.AtariPreprocessing(
             env,
             noop_max=30,
-            frame_skip=4,
+            frame_skip=1,
             screen_size=84,
             grayscale_obs=True,
             scale_obs=True,

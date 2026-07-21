@@ -56,7 +56,14 @@ class Robot():
         self.action = 0
         self.prev = 0
         self.actions = {'all' : 0, 'neutral': 0, 'down': 0, 'up':0}
-
+        
+    def _wait_for_stick_confirm(self):
+        
+        while True:
+            events = inputs.get_gamepad()
+            for e in events:
+                if e.code == 'ABS_Y':
+                    return
     def controller(self):
         """
         Reads the actions from the controller
@@ -100,22 +107,35 @@ class Robot():
         ))
         try:
             tp.connect()
-            for i in ['home', 'neutral', 'up', 'down']:
+            teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+
+                # drive the follower from the leader continuously in the
+                # background while we wait for explicit capture confirmations.
+                # duration is set very large to approximate "run until we're
+                # done calibrating" -- teleop_loop wants a fixed duration, so
+                # this is a workaround rather than a documented infinite mode.
+            def teleop_worker():
+                teleop_loop(
+                    teleop=tp,
+                    robot=self.rb,
+                    fps=30,
+                    teleop_action_processor=teleop_action_processor,
+                    robot_action_processor=robot_action_processor,
+                    robot_observation_processor=robot_observation_processor,
+                    duration=10**7,
+                )
+
+            teleop_thread = threading.Thread(target=teleop_worker, daemon=True)
+            teleop_thread.start()
+
+            for i in ['up',  'neutral', 'down']:
                 if not self.positions[i]:
-                    print("taking the postion for ", i)
-                    #takes from the teleoperate script to use the leader arm as a way to save location
-                    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
-                    teleop_loop(
-                        teleop=tp, 
-                        robot=self.rb,
-                        fps=30, 
-                        teleop_action_processor=teleop_action_processor, 
-                        robot_action_processor=robot_action_processor, 
-                        robot_observation_processor=robot_observation_processor,
-                        duration = 10)
-                    time.sleep(2.0)
+                    print("Move the arm to the '", i, "' position with the leader,")
+                    print("then flick the arcade stick to confirm capture.")
+                    self._wait_for_stick_confirm()
                     obs = self.rb.get_observation()
                     self.positions[i] = {k:v for k,v in obs.items() if '.pos' in k}
+                    print("Captured '", i, "':", self.positions[i])
                 else:
                     print("already have position for ", i)
 
@@ -134,7 +154,6 @@ class Robot():
                     continue
                 self.rb.send_action(self.positions[self.task] )
 
-                time.sleep(config.EXECUTION)
             except Exception:
                 break
 

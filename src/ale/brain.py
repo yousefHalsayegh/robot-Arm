@@ -14,6 +14,7 @@ class Brain():
     """
     The class used for the RL agent
     """
+    #TODO change the parameters so that it takes from the config rather than this way
     def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0):
         
         #initializing the policy network
@@ -158,12 +159,17 @@ class Brain():
         """
 
         #divides the screen into where the court (mid side) and player (right side) of the screens
-        court =obs[14:76, 16:79]
-        player = obs[14:76, 70:79]
+        court =obs[15:75, 0:80]
+        player = obs[15:75, 75:84]
 
         #Locates the location of the ball using thresholds for the intensity then extracting the Y axis
         ball_pixels = np.argwhere((court > 0.7) & (court < 0.9))
-        ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
+        MIN_BALL_PIXELS = 1
+        MAX_BALL_PIXELS = 8
+        if MIN_BALL_PIXELS <= len(ball_pixels) <= MAX_BALL_PIXELS:
+            ball_y = float(np.mean(ball_pixels[:, 0]))
+        else:
+            ball_y = None
 
         #Locates the location of the player paddle using thresholds for the intensity then extracting the Y axis
         paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
@@ -199,6 +205,8 @@ class Brain():
             except ValueError:
                 print("Please enter a number")
                 continue
+
+
 class Network(nn.Module):
     """
     The CNN used in the training
@@ -230,7 +238,7 @@ class Network(nn.Module):
         return self.fc(self.conv(input))
     
 class ReplayBuffer:
-    #TODO check with the current add, but see later the weighted replay buffer
+
     """
     Used to save observations for the CNN and then sampled from for training purposes 
     """
