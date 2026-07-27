@@ -118,11 +118,11 @@ def joystick_zone(object_art, env_index):
 
 ZONE_TO_ACT = {"up": 2, "down": 3, "neutral": 0}
 
-DEADZONE_DEG = 6.5 
+DEADZONE_DEG = 6.0 
 
 # joint order from your earlier print: ['PivotY', 'PivotX']
-PIVOT_Y_IDX = 0
-PIVOT_X_IDX = 1
+PIVOT_Y_IDX = 1
+PIVOT_X_IDX = 0
 
 def joystick_registered(object_art, env_index, task):
     tilt = object_art.data.joint_pos[env_index].cpu().numpy()  # [PivotY, PivotX], radians
@@ -266,10 +266,10 @@ def training(args, env, simulation_app):
                         failsafe[i] =0
                         decision_states[i] = states[i].copy()
                     current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
-                    failsafe[i] += 1
+                    failsafe[i] += 0
 
                 # ── batched arm command + sim step ────────────────
-                send_targets(so101, robots, device)
+                send_targets(so101, robots)
                 sim_step()
 
                 # ── step ALL ALE envs at once ─────────────────────

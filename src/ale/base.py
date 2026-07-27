@@ -10,7 +10,7 @@ from robot_noVla import Robot
 import numpy as np
 import threading
 import pygame
-
+import time
 
 gym.register_envs(ale_py)
 
@@ -99,7 +99,15 @@ def main():
     #save the postions
     with open("positions.json", "w") as f:
         json.dump(robot.positions, f, indent=2)
-
+    start = time.perf_counter()
+    actions = {
+        0: "neutral",
+        1: "neutral",
+        2: "up",
+        3: "down",
+        4 : "up",
+        5 : "down"
+    }
     while True:
         #main loop
         try:
@@ -114,14 +122,11 @@ def main():
             new_ball_y, new_paddle_y = ball_position(obs[-1])
             action = choose_action(new_ball_y, new_paddle_y)
             print(robot.task)
-            if action in (2, 4):
-                robot.task = "up"
-            elif action in (3, 5):
-                robot.task = "down"
-            elif action in (0, 1):
-                robot.task = "neutral"
+            robot.task = actions[action]
 
-
+            if actions[robot.action] == robot.task:
+                print(abs(start - time.perf_counter()))
+                start = time.perf_counter()
     
             render = env.render()
             surf = pygame.surfarray.make_surface(render.transpose(1, 0, 2))

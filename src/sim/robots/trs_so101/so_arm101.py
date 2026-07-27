@@ -57,8 +57,8 @@ SO_ARM101_CFG = ArticulationCfg(
             stiffness={
                 "shoulder_pan": 200.0,  # Highest - moves all mass
                 "shoulder_lift": 170.0 ,  # Slightly less than rotation
-                "elbow_flex": 120.0 * 1.5,  # Reduced based on less mass
-                "wrist_flex": 80.0 * 1.5,  # Reduced for less mass
+                "elbow_flex": 120.0 ,  # Reduced based on less mass
+                "wrist_flex": 80.0 ,  # Reduced for less mass
                 "wrist_roll": 50.0,  # Low mass to move
             },
             damping={

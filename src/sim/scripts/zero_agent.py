@@ -3,6 +3,7 @@
 import argparse
 from isaaclab.app import AppLauncher
 import ale.config as config
+import time
 
 parser = argparse.ArgumentParser("Isaac Sim DQN — Robot Arm Pong")
 parser.add_argument("--task",type=str,default=None)
@@ -26,9 +27,10 @@ from isaaclab_tasks.utils import parse_env_cfg
 from sim.utils.robot_sim import (
     RobotSim, POSITIONS,
     send_targets, batch_move_arms,
-    batch_move_arm,calibrate_zone_position, measure_joystick_response
+    batch_move_arm,calibrate_zone_position, measure_joystick_response,calibrate_shoulder_pan_centering
 )
 from sim.utils.pong_display import PongDisplay
+from sim.utils.pong_debug import PongDebugDisplay
 
 import ale_py
 gym.register_envs(ale_py)
@@ -71,8 +73,8 @@ ZONE_TO_ACT = {"up": 2, "down": 3, "neutral": 0}
 DEADZONE_DEG = 6.0 
 
 # joint order from your earlier print: ['PivotY', 'PivotX']
-PIVOT_Y_IDX = 0
-PIVOT_X_IDX = 1
+PIVOT_Y_IDX = 1
+PIVOT_X_IDX = 0
 NOOP, FIRE, UP, DOWN = 0, 1, 2, 3
 
 def joystick_registered(object_art, env_index, task):
@@ -94,17 +96,17 @@ def ball_position(obs):
         """
 
         #divides the screen into where the court (mid side) and player (right side) of the screens
-        court =obs[15:75, 5:80]
-        player = obs[15:79, 75:84]
+        court =obs[15:77, 12:71]
+        player = obs[15:77, 72:76]
 
         #Locates the location of the ball using thresholds for the intensity then extracting the Y axis
-        ball_pixels = np.argwhere((court > 0.5) & (court < 0.9))
+        ball_pixels = np.argwhere((court > 0.4) & (court < 0.9))
         ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
 
 
 
         #Locates the location of the player paddle using thresholds for the intensity then extracting the Y axis
-        paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
+        paddle_pixels = np.argwhere((player > 0.5) & (player < 0.7))
         paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
         return ball_y, paddle_y
 
@@ -122,6 +124,81 @@ def choose_action(ball_y, paddle_y, deadzone=3):
         return UP
     else:
         return DOWN
+
+OPPOSITE = {"up": "down", "down": "up"}
+ 
+ 
+def route_through_neutral(robot, desired_task, arrived_at_neutral_fn):
+    
+    pending_attr = "_neutral_transit_pending"
+    pending = getattr(robot, pending_attr, None)
+ 
+    if pending is not None:
+        if arrived_at_neutral_fn():
+            setattr(robot, pending_attr, None)
+            return pending
+        return "neutral"
+ 
+    current = robot.task
+    if OPPOSITE.get(current) == desired_task:
+        setattr(robot, pending_attr, desired_task)
+        return "neutral"
+ 
+    return desired_task
+ 
+
+def arrived_at_neutral(articulation, env_index, POSITIONS, threshold=np.deg2rad(3)):
+    current = articulation.data.joint_pos[env_index].cpu().numpy()
+    error = max(abs(current - POSITIONS["neutral"]))
+    return error < threshold
+
+def calibrate(so101, robots, sim_step, device, object_art, base_env, shoulder=True, directions=True, speed=True):
+    if shoulder:
+        calibrate_shoulder_pan_centering(so101, object_art, 0, sim_step, POSITIONS)
+
+    if directions:
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "home", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        POSITIONS["up"]   = calibrate_zone_position(so101, object_art, 0, "up",   sim_step,
+                                                PIVOT_X_IDX, DEADZONE_DEG, POSITIONS)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+
+
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "home", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        POSITIONS["down"] = calibrate_zone_position(so101, object_art, 0, "down", sim_step, 
+                                                PIVOT_X_IDX, DEADZONE_DEG, POSITIONS)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        batch_move_arms(so101, robots, sim_step, "home", device)
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+
+    if speed:
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        physics_dt = base_env.sim.get_physics_dt()
+
+        measure_joystick_response(so101, object_art, robots[0], sim_step, "up", PIVOT_X_IDX, DEADZONE_DEG, physics_dt)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        batch_move_arms(so101, robots, sim_step, "home", device)
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+
+        measure_joystick_response(so101, object_art, robots[0], sim_step, "down", PIVOT_X_IDX, DEADZONE_DEG, physics_dt)
+        print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+        batch_move_arms(so101, robots, sim_step, "home", device)
+        batch_move_arms(so101, robots, sim_step, "neutral", device)
+
+    for k in POSITIONS:
+        print(f"The positions are {np.rad2deg(POSITIONS[k])}")
 
 
 def main():
@@ -154,6 +231,7 @@ def main():
 
     # ── Pong display inside Isaac Sim ─────────────────────────────
     display = PongDisplay(num_envs=N)
+    debug_display = PongDebugDisplay(num_envs=N)
 
     # ── articulation ──────────────────────────────────────────────
     so101  = base_env.scene["robot"]
@@ -173,54 +251,28 @@ def main():
     current_acts  = np.zeros(N, dtype=np.int64)
     failsafe  = np.zeros(N, dtype=np.int64)
     episode = 0
-
-    batch_move_arms(so101, robots, sim_step, "home", device)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    POSITIONS["up"]   = calibrate_zone_position(so101, object_art, 0, "up",   sim_step,
-                                              PIVOT_X_IDX, DEADZONE_DEG, POSITIONS)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-
-
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    batch_move_arms(so101, robots, sim_step, "home", device)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    POSITIONS["down"] = calibrate_zone_position(so101, object_art, 0, "down", sim_step, 
-                                              PIVOT_X_IDX, DEADZONE_DEG, POSITIONS)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-
     
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    batch_move_arms(so101, robots, sim_step, "home", device)
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    physics_dt = base_env.sim.get_physics_dt()
-
-    measure_joystick_response(so101, object_art, robots[0], sim_step, "up", PIVOT_X_IDX, DEADZONE_DEG, physics_dt)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-    batch_move_arms(so101, robots, sim_step, "home", device)
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
-
-    measure_joystick_response(so101, object_art, robots[0], sim_step, "down", PIVOT_X_IDX, DEADZONE_DEG, physics_dt)
-    print(f"location of joystick={object_art.data.joint_pos[0].cpu().numpy() }")
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
+    actions = {
+        0: "neutral",
+        1: "neutral",
+        2: "up",
+        3: "down",
+        4 : "up",
+        5 : "down"
+    }
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
 
-    
+    calibrate(so101, robots, sim_step, device, object_art, base_env,shoulder=False, directions=False)
 
+    ball_y = None
+    paddle_y = None
+    start = time.perf_counter()
+    diff = 0
     try:
      
         while episode < (args_cli.episode + 1):
             
-            
-            
-
-
             # ── action gating per env ─────────────────────────
             for i in range(N):
                 joystick_input = joystick_registered(object_art, i, robots[i].task)
@@ -236,21 +288,23 @@ def main():
                     ball_y, paddle_y = ball_position(states[i][-1])
                     act = choose_action(ball_y, paddle_y)
                     
-                    if act in (2, 4):
-                        robots[i].task = "up"
-                        
-                    elif act in (3, 5):
-                        robots[i].task = "down"
-                        
-                    else:
-                        robots[i].task = "neutral"
+                    robots[i].task =actions[act]
                     failsafe[i] = 0 
-                failsafe[i] += 1
+                # failsafe[i] += 1
                 current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
 
-                
-                
-                
+                if current_acts[i] == act:
+                    diff = abs(start - time.perf_counter())
+                    start = 0
+
+                if ball_y is not None and paddle_y is not None:
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y:2.2f}|paddle:{paddle_y:2.2f}|diff:{(ball_y - paddle_y):2.2f}|time:{diff:2.2f}", end="\r")
+                elif ball_y is not None:
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y:2.2f}|paddle:{paddle_y}|diff:00.00|time:{diff:2.2f}", end="\r")
+
+                elif paddle_y is not None:
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y}|paddle:{paddle_y:2.2f}|diff:00.00|time:{diff:2.2f}", end="\r")
+
                 # ball_y, paddle_y = ball_position(states[i][-1])
                 # current_acts[i] = choose_action(ball_y, paddle_y)
                 
@@ -272,6 +326,7 @@ def main():
                 try:
                     frame = ale_envs.envs[i].render()
                     display.update(i, frame)
+                    
                 except Exception:
                     pass
 
@@ -290,6 +345,7 @@ def main():
 
                 else:
                     states[i] = next_obs[i]
+                debug_display.update_all([states[i][-1]])
 
 
     except KeyboardInterrupt:

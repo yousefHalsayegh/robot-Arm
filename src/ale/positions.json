@@ -1,7 +1,7 @@
 {
   "home": {
     "shoulder_pan.pos": -7.5,
-    "shoulder_lift.pos": 12,
+    "shoulder_lift.pos": 11,
     "elbow_flex.pos": 53.0,
     "wrist_flex.pos": -80.0,
     "wrist_roll.pos": -91.0,
@@ -9,26 +9,26 @@
   },
   "down": {
     "shoulder_pan.pos": -7.5,
-    "shoulder_lift.pos": 12.0,
+    "shoulder_lift.pos": 10.0,
     "elbow_flex.pos": 69.0,
-    "wrist_flex.pos": -73.0,
+    "wrist_flex.pos": -65.0,
     "wrist_roll.pos": -90.0,
-    "gripper.pos": 14.35
+    "gripper.pos": 15.35
   },
   "up": {
     "shoulder_pan.pos": -7.5,
-    "shoulder_lift.pos": 12,
-    "elbow_flex.pos": 48.0,
-    "wrist_flex.pos": -73.0,
+    "shoulder_lift.pos": 10,
+    "elbow_flex.pos": 43.0,
+    "wrist_flex.pos": -63.0,
     "wrist_roll.pos": -90.0,
-    "gripper.pos": 14.350000000000001
+    "gripper.pos": 15.350000000000001
   },
   "neutral": {
     "shoulder_pan.pos": -7.5,
-    "shoulder_lift.pos": 12,
+    "shoulder_lift.pos": 10,
     "elbow_flex.pos": 50.0,
-    "wrist_flex.pos": -73.0,
+    "wrist_flex.pos": -66.0,
     "wrist_roll.pos": -90,
-    "gripper.pos": 14.35
+    "gripper.pos": 15.35
   }
 }

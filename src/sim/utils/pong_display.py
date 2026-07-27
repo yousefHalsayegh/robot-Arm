@@ -1,4 +1,3 @@
-
 import numpy as np
 
 
@@ -7,6 +6,11 @@ class PongDisplay:
     Single omni.ui window showing all N Pong envs side by side.
     Uses DynamicTextureProvider — same GLX context as Isaac Sim,
     no SDL conflict.
+
+    Docks as a tab alongside an existing panel (default: "Property")
+    instead of opening as a separate floating window -- same behavior
+    you'd get clicking between tabs like "Property"/"Stage" in the
+    normal Isaac Sim UI.
     """
 
     def __init__(
@@ -15,12 +19,14 @@ class PongDisplay:
         frame_w:    int = 160,   # native ALE Pong width
         frame_h:    int = 210,   # native ALE Pong height
         scale:      int = 2,     # display scale factor
+        dock_next_to: str = "Stage",  # existing panel to dock alongside
     ):
         self.num_envs  = num_envs
         self.frame_w   = frame_w
         self.frame_h   = frame_h
         self.disp_w    = frame_w * scale
         self.disp_h    = frame_h * scale
+        self.dock_next_to = dock_next_to
         self.providers = []
         self._build()
 
@@ -33,6 +39,14 @@ class PongDisplay:
             "Pong Environments",
             width=total_w,
             height=self.disp_h,
+        )
+
+        # dock as a tab next to an existing panel (e.g. "Property") rather
+        # than floating as its own window. deferred_dock_in waits for the
+        # target panel to exist before docking, so this is safe to call
+        # even if the target panel hasn't fully initialized yet.
+        self._window.deferred_dock_in(
+            self.dock_next_to, ui.DockPolicy.CURRENT_WINDOW_IS_ACTIVE
         )
 
         with self._window.frame:
