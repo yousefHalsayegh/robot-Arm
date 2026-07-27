@@ -24,7 +24,7 @@ SO_ARM101_CFG = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
             solver_position_iteration_count=8,
-            solver_velocity_iteration_count=0,
+            solver_velocity_iteration_count=4,
         ),
         joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
             gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
@@ -56,15 +56,15 @@ SO_ARM101_CFG = ArticulationCfg(
             velocity_limit_sim=500.0,
             stiffness={
                 "shoulder_pan": 200.0,  # Highest - moves all mass
-                "shoulder_lift": 170.0,  # Slightly less than rotation
-                "elbow_flex": 120.0,  # Reduced based on less mass
-                "wrist_flex": 80.0,  # Reduced for less mass
+                "shoulder_lift": 170.0 ,  # Slightly less than rotation
+                "elbow_flex": 120.0 * 1.5,  # Reduced based on less mass
+                "wrist_flex": 80.0 * 1.5,  # Reduced for less mass
                 "wrist_roll": 50.0,  # Low mass to move
             },
             damping={
                 "shoulder_pan": 80.0,
                 "shoulder_lift": 65.0,
-                "elbow_flex": 45.0,
+                "elbow_flex": 45.0  ,
                 "wrist_flex": 30.0,
                 "wrist_roll": 20.0,
             },

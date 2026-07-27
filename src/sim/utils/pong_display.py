@@ -71,7 +71,7 @@ class PongDisplay:
             env_index: which env (0 to num_envs-1)
             rgb_frame: [H, W, 3] uint8 RGB from ale_env.render()
         """
-        if rgb_frame is None or rgb_frame.max() == 0:
+        if rgb_frame is None:
             return
 
         h, w, _ = rgb_frame.shape
