@@ -125,33 +125,6 @@ def choose_action(ball_y, paddle_y, deadzone=3):
     else:
         return DOWN
 
-OPPOSITE = {"up": "down", "down": "up"}
- 
- 
-def route_through_neutral(robot, desired_task, arrived_at_neutral_fn):
-    
-    pending_attr = "_neutral_transit_pending"
-    pending = getattr(robot, pending_attr, None)
- 
-    if pending is not None:
-        if arrived_at_neutral_fn():
-            setattr(robot, pending_attr, None)
-            return pending
-        return "neutral"
- 
-    current = robot.task
-    if OPPOSITE.get(current) == desired_task:
-        setattr(robot, pending_attr, desired_task)
-        return "neutral"
- 
-    return desired_task
- 
-
-def arrived_at_neutral(articulation, env_index, POSITIONS, threshold=np.deg2rad(3)):
-    current = articulation.data.joint_pos[env_index].cpu().numpy()
-    error = max(abs(current - POSITIONS["neutral"]))
-    return error < threshold
-
 def calibrate(so101, robots, sim_step, device, object_art, base_env, shoulder=True, directions=True, speed=True):
     if shoulder:
         calibrate_shoulder_pan_centering(so101, object_art, 0, sim_step, POSITIONS)
@@ -200,6 +173,25 @@ def calibrate(so101, robots, sim_step, device, object_art, base_env, shoulder=Tr
     for k in POSITIONS:
         print(f"The positions are {np.rad2deg(POSITIONS[k])}")
 
+def predict(ale_env_wrapped, c_frames, c_action, T):
+    # get inner ALE for state save/restore
+    inner = ale_env_wrapped
+    while hasattr(inner, 'env'):
+        inner = inner.env
+    
+    saved = inner.ale.cloneState()
+    predict_frame = list(c_frames)
+
+    for _ in range(T):
+        obs, _, term, trunc, _ = ale_env_wrapped.step(c_action)
+        if term or trunc:
+            break
+        # obs is [4, 84, 84] from FrameStackObservation — take last frame
+        predict_frame.pop(0)
+        predict_frame.append(obs[-1])
+
+    inner.ale.restoreState(saved)
+    return np.stack(predict_frame, axis=0)
 
 def main():
 
@@ -263,35 +255,40 @@ def main():
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
 
-    calibrate(so101, robots, sim_step, device, object_art, base_env,shoulder=False, directions=False)
+    #calibrate(so101, robots, sim_step, device, object_art, base_env,shoulder=False, directions=False)
 
     ball_y = None
     paddle_y = None
     start = time.perf_counter()
     diff = 0
+    predictions = [obs[i].copy() for i in range(N)]
     try:
      
         while episode < (args_cli.episode + 1):
             
             # ── action gating per env ─────────────────────────
             for i in range(N):
+
+                current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
                 joystick_input = joystick_registered(object_art, i, robots[i].task)
                 timeout = failsafe[i] > 60
-
+                
                 if timeout and not joystick_input:
                     batch_move_arm(so101, robots[i], sim_step, "home", device)
                     batch_move_arm(so101, robots[i], sim_step, "neutral", device)
                     failsafe[i] = 0 
 
                 if joystick_input :
-                    
-                    ball_y, paddle_y = ball_position(states[i][-1])
+                    predictions[i] = predict(ale_envs.envs[i], list(states[i]), current_acts[i], 10)
+                    ball_y, paddle_y = ball_position(predictions[i][-1])
                     act = choose_action(ball_y, paddle_y)
                     
                     robots[i].task =actions[act]
                     failsafe[i] = 0 
-                # failsafe[i] += 1
-                current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
+
+
+                failsafe[i] += 1
+                
 
                 if current_acts[i] == act:
                     diff = abs(start - time.perf_counter())
@@ -300,15 +297,17 @@ def main():
                 if ball_y is not None and paddle_y is not None:
                     print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y:2.2f}|paddle:{paddle_y:2.2f}|diff:{(ball_y - paddle_y):2.2f}|time:{diff:2.2f}", end="\r")
                 elif ball_y is not None:
-                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y:2.2f}|paddle:{paddle_y}|diff:00.00|time:{diff:2.2f}", end="\r")
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y:2.2f}|paddle:00.00|diff:00.00|time:{diff:2.2f}", end="\r")
 
                 elif paddle_y is not None:
-                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:{ball_y}|paddle:{paddle_y:2.2f}|diff:00.00|time:{diff:2.2f}", end="\r")
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:00.00|paddle:{paddle_y:2.2f}|diff:00.00|time:{diff:2.2f}", end="\r")
+                else:
+                    print(f"for env.{i}|current action:{current_acts[i]}|act:{act}|ball:00.00|paddle:00.00|diff:00.00|time:{diff:2.2f}", end="\r")
 
                 # ball_y, paddle_y = ball_position(states[i][-1])
                 # current_acts[i] = choose_action(ball_y, paddle_y)
                 
-            sim_step()
+            
                             
             
             # ── step ALL ALE envs at once ─────────────────────
@@ -320,7 +319,7 @@ def main():
 
             # ── batched arm command + sim step ────────────────
             send_targets(so101, robots)
-
+            sim_step()
             # ── update Pong display ───────────────────────────
             for i in range(N):
                 try:
@@ -345,7 +344,8 @@ def main():
 
                 else:
                     states[i] = next_obs[i]
-                debug_display.update_all([states[i][-1]])
+            
+            debug_display.update_all([predictions[i][-1] for i in range(N)])
 
 
     except KeyboardInterrupt:

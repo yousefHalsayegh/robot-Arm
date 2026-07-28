@@ -9,8 +9,8 @@ import numpy as np
 DEADZONE_DEG = 6.5 
 
 # joint order from your earlier print: ['PivotY', 'PivotX']
-PIVOT_Y_IDX = 0 #left and right
-PIVOT_X_IDX = 1 #up and down
+PIVOT_Y_IDX = 1 #left and right
+PIVOT_X_IDX = 0 #up and down
 
 #Helper Functions
 

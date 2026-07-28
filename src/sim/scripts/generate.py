@@ -49,7 +49,6 @@ from ale.brain import Brain
 from sim.utils.robot_sim import (
     RobotSim, POSITIONS,
     send_targets, batch_move_arms,
-    batch_move_arm,
 )
 from sim.utils.pong_display import PongDisplay
 
@@ -102,7 +101,7 @@ def env_init(seed, rank):
         return env
     return _init
 
-def joystick_zone(object_art, env_index):
+def joystick_zone(object_art, env_index, robot):
     """Classify the joystick's CURRENT physical position into a zone,
     independent of what task it's being driven toward. This is what the
     game should actually see, moment to moment — same as a real controller."""
@@ -110,13 +109,18 @@ def joystick_zone(object_art, env_index):
     axis_deg = tilt_deg[PIVOT_X_IDX]
 
     if axis_deg < -DEADZONE_DEG:
+        robot.actions["up"] += 1
         return "up"
     elif axis_deg > DEADZONE_DEG:
+        robot.actions["down"] += 1
         return "down"
+
+    robot.actions["neutral"] += 1
     return "neutral"
 
 
 ZONE_TO_ACT = {"up": 2, "down": 3, "neutral": 0}
+ZONE = {"up": 2, "down": 3, "neutral": 0, "home": 6}
 
 DEADZONE_DEG = 6.0 
 
@@ -125,10 +129,11 @@ PIVOT_Y_IDX = 1
 PIVOT_X_IDX = 0
 
 def joystick_registered(object_art, env_index, task):
-    tilt = object_art.data.joint_pos[env_index].cpu().numpy()  # [PivotY, PivotX], radians
+    tilt = object_art.data.joint_pos[env_index].cpu().numpy()  
     tilt_deg = np.rad2deg(tilt)
+    # print(f"for task {ZONE[task]}, the current title deg is [{abs(tilt_deg[PIVOT_X_IDX]):2.2f}, {abs(tilt_deg[PIVOT_Y_IDX]):2.2f}]", end="\r")
     if task == "neutral":
-        return np.abs(tilt_deg).max() < DEADZONE_DEG
+        return np.abs(tilt_deg[PIVOT_X_IDX]) < (DEADZONE_DEG - 1)
 
     axis_deg = tilt_deg[PIVOT_X_IDX]
     if task == "up":
@@ -200,10 +205,9 @@ def training(args, env, simulation_app):
     episode       = start
     ep_times      = [time.time()] * N
     episode_time  = []
-    actions       = [{"all": 0, "up": 0, "down": 0, "neutral": 0}
+    actions       = [{"all": 0, "up": 0, "down": 0, "neutral": 0, "home":0}
                      for _ in range(N)]
     current_acts  = np.zeros(N, dtype=np.int64)
-    failsafe_Count  = np.zeros(N, dtype=np.int64)
     failsafe  = np.zeros(N, dtype=np.int64)
     loss, grad_norm = 0.0, 0.0
     decision_states = states.copy()
@@ -212,6 +216,10 @@ def training(args, env, simulation_app):
     tracking_reward = np.zeros(N, dtype=np.float64)
     batch_move_arms(so101, robots, sim_step, "home", device)
     batch_move_arms(so101, robots, sim_step, "neutral", device)
+
+    physics_dt = base_env.sim.get_physics_dt()
+    response_time = [[]]* N
+
     try:
         with tqdm(total=args.episode, initial=start,
                   desc="Training", unit="ep") as pbar:
@@ -221,12 +229,26 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     robot    = robots[i]
                     joystick_input = joystick_registered(object_art, i, robot.task)
-                    timeout = failsafe[i] > 60
+                    timeout = failsafe[i] > 70
 
-                    if timeout:
-                        failsafe_Count[i] += 1
-                    if joystick_input or timeout:
-                     
+                    if timeout and not joystick_input and not robot.reseting:
+
+                            robot.reseting = True
+                            robot.task = "home"
+                            actions[i]["home"] += 1
+
+                    if robot.reseting:
+                        current = so101.data.joint_pos[i].cpu().numpy()
+                        error = np.abs(current - POSITIONS[robot.task]).max()
+                        if error < np.deg2rad(1.5):
+                            if robot.task == "home":
+                                robot.task = "neutral"   
+                            else:
+                                robot.reseting = False   
+                        failsafe[i] = 0
+
+                    current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i,robot)]
+                    if joystick_input and not robot.reseting:
                         temp = pending_reward[i]
                         track = 0
                         ball_y, paddle_y = brain.ball_position(states[i][-1])
@@ -236,7 +258,7 @@ def training(args, env, simulation_app):
                                 new_distance  = abs(ball_y  - paddle_y)
                                 prev_distance = abs(prev_ball_y - prev_paddle_y)
                                 if new_distance < prev_distance:
-                                    track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                    track += config.DISTANCE_REWARD * ((prev_distance-new_distance) / config.CROP)
                                 elif new_distance > prev_distance:
                                     track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
                         clipped_r =float(np.clip((temp+track), -1, 1))
@@ -251,7 +273,7 @@ def training(args, env, simulation_app):
 
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
-                        prediction = predict(ale_envs.envs[i], list(states[i]), int(current_acts[i]), failsafe[i])
+                        prediction = predict(ale_envs.envs[i], list(states[i]), int(current_acts[i]), 10)
                         act = brain.predict_next_action(prediction, steps, ale_envs)
                         if act in (2, 4):
                             robot.task       = "up"
@@ -261,12 +283,16 @@ def training(args, env, simulation_app):
                             actions[i]["down"] += 1
                         else:
                             robot.task            = "neutral"
+                            
                             actions[i]["neutral"] += 1
                         actions[i]["all"] += 1
-                        failsafe[i] =0
+                        robot.actions["all"] += 1
                         decision_states[i] = states[i].copy()
-                    current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
-                    failsafe[i] += 0
+                        if failsafe[i] > 0:
+                            response_time[i].append(failsafe[i] * physics_dt)
+                        failsafe[i] = 0
+                    
+                    failsafe[i] += 1
 
                 # ── batched arm command + sim step ────────────────
                 send_targets(so101, robots)
@@ -286,39 +312,40 @@ def training(args, env, simulation_app):
                     except Exception:
                         pass
                 simulation_app.update()
-
                 # ── per-env processing ────────────────────────────
                 for i in range(N):
+
+
                     done_i   = bool(dones_batch[i])
                     rew      = float(rew_batch[i])
                     goal_reward[i] += rew
                     #tracking
                     track = 0
-                    ball_y, paddle_y = brain.ball_position(states[i][-1])
                     if ball_y is not None and paddle_y is not None:
-                        prev_ball_y, prev_paddle_y = brain.ball_position(decision_states[i][-1])
                         if prev_ball_y is not None and prev_paddle_y is not None:
                             new_distance  = abs(ball_y  - paddle_y)
                             prev_distance = abs(prev_ball_y - prev_paddle_y)
                             if new_distance < prev_distance:
-                                track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                track += config.DISTANCE_REWARD * ((prev_distance-new_distance) / config.CROP)
                             elif new_distance > prev_distance:
                                 track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                    clipped_r = float(np.clip(np.sign(rew+track), -1, 1))
+                    clipped_r = float(np.clip((rew+track), -1, 1))
                     tracking_reward[i] += track
                     pending_reward[i] += (brain.gamma ** failsafe[i]) * clipped_r
                     # print("pending reward ", pending_reward[i])
                     # ── episode end ───────────────────────────────
                     if steps % 200 == 0:
                             priorities = brain.buffer.priorities[:len(brain.buffer)]
-                            wandb.log({
-                                "buffer/priority_max":  priorities.max(),
-                                "buffer/priority_min":  priorities.min(),
-                                "buffer/priority_mean": priorities.mean(),
-                                "buffer/priority_std":  priorities.std(),
-                            }, step=steps)
+                            if args.wandb:
+                                wandb.log({
+                                    "buffer/priority_max":  priorities.max(),
+                                    "buffer/priority_min":  priorities.min(),
+                                    "buffer/priority_mean": priorities.mean(),
+                                    "buffer/priority_std":  priorities.std(),
+                                }, step=steps)
                     if done_i:
                         # reward + buffer
+                        terminal = float(np.clip(pending_reward[i]+track, -1, 1))
                         brain.buffer.push(
                             decision_states[i], int(current_acts[i]),
                             clipped_r, next_obs[i], True, failsafe[i]
@@ -329,8 +356,6 @@ def training(args, env, simulation_app):
                         # train
                         for _ in range(args.updates):
                             loss, grad_norm = brain.train()
-                            
-                        batch_move_arm(so101, robots[i], sim_step, "neutral", device)
                         ep_time = time.time() - ep_times[i]
                         episode_time.append(ep_time)
                         eta = np.mean(episode_time[-100:]) * \
@@ -378,7 +403,12 @@ def training(args, env, simulation_app):
                                 "episode/RL_actions_up":      actions[i]["up"],
                                 "episode/RL_actions_down":    actions[i]["down"],
                                 "episode/RL_actions_neutral": actions[i]["neutral"],
-                                "episode/failsafe": failsafe_Count[i]
+                                "episode/Reset": actions[i]["home"],
+                                "episode/RB_action_all":      robots[i].actions["all"],
+                                "episode/RB_actions_up":      robots[i].actions["up"],
+                                "episode/RB_actions_down":    robots[i].actions["down"],
+                                "episode/RB_actions_neutral": robots[i].actions["neutral"],
+                                "episode/Response_time": wandb.Histogram(response_time[i]),
                             }, step=steps)
 
 
@@ -389,7 +419,7 @@ def training(args, env, simulation_app):
                         robots[i].actions = {"all": 0, "up": 0,
                                              "down": 0, "neutral": 0}
                         actions[i]        = {"all": 0, "up": 0,
-                                             "down": 0, "neutral": 0}
+                                             "down": 0, "neutral": 0, "home":0}
                         current_acts[i]   = 0
                         ep_times[i]       = time.time()
                         episode          += 1
@@ -397,10 +427,12 @@ def training(args, env, simulation_app):
                         # SyncVectorEnv auto-resets done envs
                         # next_obs[i] is already the fresh reset obs
                         states[i] = next_obs[i]
-                        failsafe_Count[i] = 0
                         decision_states[i] = next_obs[i].copy()
-
-                        robots[i].task = "neutral"
+                        robots[i].reseting = True
+                        robots[i].task = "home"
+                        actions[i]["home"] += 1
+                        response_time[i] = []
+                        
 
                     else:
                         states[i] = next_obs[i]

@@ -24,7 +24,7 @@ POSITIONS = {
     ], dtype=np.float32),
 
     "down": np.array([
-        -0.1,  # shoulder_pan
+        -0.4,  # shoulder_pan
         10,  # shoulder_lift
         57.0,  # elbow_flex
         -69.0,  # wrist_flex
@@ -33,7 +33,7 @@ POSITIONS = {
     ], dtype=np.float32),
 
     "up": np.array([
-        -0.1,  # shoulder_pan
+        -0.4,  # shoulder_pan
         12,  # shoulder_lift
         45.6,  # elbow_flex
         -60.999992,  # wrist_flex
@@ -42,7 +42,7 @@ POSITIONS = {
     ], dtype=np.float32),
 
     "neutral": np.array([
-        -0.1,  # shoulder_pan
+        -0.4,  # shoulder_pan
         12,  # shoulder_lift
         52.0,  # elbow_flex
         -63.0,  # wrist_flex
@@ -66,7 +66,7 @@ for k in POSITIONS:
     POSITIONS[k] = np.deg2rad(POSITIONS[k])
 
 # equivalent to error < 3 degrees on the physical arm
-ARRIVAL_THRESHOLD = np.deg2rad(3)
+ARRIVAL_THRESHOLD = np.deg2rad(1.5)
 
 
 class RobotSim:
@@ -122,6 +122,7 @@ def send_targets(articulation, robots):
     targets = torch.stack([POSITIONS_T[r.task] for r in robots], dim=0)
     articulation.set_joint_position_target(targets)
     articulation.write_data_to_sim()
+
 
 
 def batch_move_arms(articulation, robots, sim_step_fn,
