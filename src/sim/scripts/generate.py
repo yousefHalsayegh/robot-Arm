@@ -171,6 +171,8 @@ def training(args, env, simulation_app):
             name=f"Sim-{args.job_name}",
             config={k: v for k, v in vars(args).items()
                     if k not in {"job_name"}},
+            resume="allow",
+            id="n3g8r8rd"
         )
 
     # ── ALE envs via SyncVectorEnv ────────────────────────────────
@@ -409,8 +411,10 @@ def training(args, env, simulation_app):
                                 "episode/RB_actions_down":    robots[i].actions["down"],
                                 "episode/RB_actions_neutral": robots[i].actions["neutral"],
                                 "episode/Response_time": wandb.Histogram(response_time[i]),
+                                "q_values/mean": brain.q_value.mean().item(),
+                                "q_values/max":  brain.q_value.max().item(),
+                                "q_values/min":  brain.q_value.min().item(),
                             }, step=steps)
-
 
                         # reset per-env trackers
                         total_rewards[i]  = 0.0

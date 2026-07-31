@@ -36,6 +36,7 @@ class Brain():
         self.eps_end = ee
         self.eps_start = es
         self.eps_decay = ed
+        self.q_value = 0
 
         self.agent = ""
     def train(self):
@@ -58,6 +59,7 @@ class Brain():
        
        #calculating the Q_Values of the collected states
        q_values = self.policy(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+       self.q_value = q_values
        with torch.no_grad():
            #calculating the approximate next Q_values and the target
            next_actions = self.policy(next_states).argmax(1, keepdim=True)
