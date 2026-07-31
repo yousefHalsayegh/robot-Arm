@@ -1,30 +1,21 @@
-#this is to train the arm to use the controller
-
+"""Launch Isaac Sim first."""
 import argparse
 from isaaclab.app import AppLauncher
-import ale.config as config
 
-parser = argparse.ArgumentParser("Isaac Sim DQN — Robot Arm Pong")
-parser.add_argument("--task",type=str,default=None)
-parser.add_argument("--num_envs",type=int,default=1)
+parser = argparse.ArgumentParser("Low-Level Joystick Controller Training")
+parser.add_argument("--task",           type=str,  default=None)
+parser.add_argument("--num_envs",       type=int,  default=8)
 parser.add_argument("--disable_fabric", action="store_true", default=False)
-parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default="Sim")
-parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
-parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
-parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
-parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
-parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
-parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
-parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
-parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
-parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
-parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
-parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
-parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
-parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
-parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
-parser.add_argument("-rec", "--record", default=False, action=argparse.BooleanOptionalAction, help="record LeRobot dataset alongside training")
-parser.add_argument("-w", "--wandb", default=True, action=argparse.BooleanOptionalAction, help="record the info in wandb")
+parser.add_argument("-jn",  "--job_name",      type=str,   default="low_level")
+parser.add_argument("-ep",  "--episodes",      type=int,   default=10000)
+parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
+parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
+parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
+parser.add_argument("-w",   "--wandb",         default=True,
+                    action=argparse.BooleanOptionalAction)
+parser.add_argument("--cam_embedding",   type=int, default=256)
+parser.add_argument("--joint_embedding", type=int, default=64)
+
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -33,127 +24,58 @@ simulation_app = app_launcher.app
 
 """Rest follows after Isaac Sim is up."""
 
-import gymnasium as gym
-import numpy as np
-import torch
 import os
 import time
+import numpy as np
+import torch
 import wandb
+from collections import deque
 from tqdm import tqdm
+
+import gymnasium as gym
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
-import isaacsim.core.utils.stage as stage_utils
-import cv2
-from ale.brain import Brain
-from sim.utils.robot_sim import (
-    RobotSim, POSITIONS,
-    send_targets, batch_move_arms,
-    batch_move_arm,
+
+from sim.utils.robo_brain import Brain
+
+from sim.tasks.joystick.mdp.observations import (
+    Frames, update_frame_stack
 )
-from sim.utils.pong_display import PongDisplay
+from sim.tasks.joystick.play_env_cfg import (
+    ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT,
+    UPPER_THRESHOLD, LOWER_THRESHOLD, WINDOW_SIZE, STAGE_EPISODE_LENGTHS,
+)
+from sim.tasks.joystick.mdp.rewards import joystick_registered, ACT_TO_ZONE
 
-import ale_py
-gym.register_envs(ale_py)
-
-def predict(ale_env_wrapped, c_frames, c_action, T):
-    # get inner ALE for state save/restore
-    inner = ale_env_wrapped
-    while hasattr(inner, 'env'):
-        inner = inner.env
-    
-    saved = inner.ale.cloneState()
-    predict_frame = list(c_frames)
-
-    for _ in range(T):
-        obs, _, term, trunc, _ = ale_env_wrapped.step(c_action)
-        if term or trunc:
-            break
-        # obs is [4, 84, 84] from FrameStackObservation — take last frame
-        predict_frame.pop(0)
-        predict_frame.append(obs[-1])
-
-    inner.ale.restoreState(saved)
-    return np.stack(predict_frame, axis=0)
+CMD_NAMES = {
+    CMD_NEUTRAL: "neutral", CMD_UP: "up",
+    CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
+}
 
 
-def format_time(seconds):
-    d = int(seconds // 86400)
+def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    return f"{d:02d}:{h:02d}:{m:02d}:{s:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
-
-def env_init(seed, rank):
-    """Factory function for SyncVectorEnv."""
-    def _init():
-        env = gym.make("ALE/Pong-v5", frameskip=1, render_mode="rgb_array")
-        env = gym.wrappers.AtariPreprocessing(
-            env,
-            noop_max=30,
-            frame_skip=4,
-            screen_size=84,
-            grayscale_obs=True,
-            scale_obs=True,
-        )
-        env = gym.wrappers.FrameStackObservation(env, stack_size=4)
-        env.reset(seed=seed + rank)
-        return env
-    return _init
-
-def joystick_zone(object_art, env_index):
-    """Classify the joystick's CURRENT physical position into a zone,
-    independent of what task it's being driven toward. This is what the
-    game should actually see, moment to moment — same as a real controller."""
-    tilt_deg = np.rad2deg(object_art.data.joint_pos[env_index].cpu().numpy())  # [PivotY, PivotX]
-    axis_deg = tilt_deg[PIVOT_X_IDX]
-
-    if axis_deg < -DEADZONE_DEG:
-        return "up"
-    elif axis_deg > DEADZONE_DEG:
-        return "down"
-    return "neutral"
-
-
-ZONE_TO_ACT = {"up": 2, "down": 3, "neutral": 0}
-
-DEADZONE_DEG = 6.5 
-
-# joint order from your earlier print: ['PivotY', 'PivotX']
-PIVOT_Y_IDX = 0
-PIVOT_X_IDX = 1
-
-def joystick_registered(object_art, env_index, task):
-    tilt = object_art.data.joint_pos[env_index].cpu().numpy()  # [PivotY, PivotX], radians
-    tilt_deg = np.rad2deg(tilt)
-    if task == "neutral":
-        return np.abs(tilt_deg).max() < DEADZONE_DEG
-
-    axis_deg = tilt_deg[PIVOT_X_IDX]
-    if task == "up":
-        return axis_deg < -DEADZONE_DEG
-    elif task == "down":
-        return axis_deg > DEADZONE_DEG
-    return False
 
 def training(args, env, simulation_app):
     N        = args.num_envs
     base_env = env.unwrapped
     device   = str(base_env.device)
-    stage    = stage_utils.get_current_stage()
 
-    # ── brain ─────────────────────────────────────────────────────
+    # ── brain ─────────────────────────────────────────────────────────────────
     brain = Brain(
-        args.learning_rate, args.warmup, args.batch,
-        args.gamma, args.tau, args.eps_end,
-        args.eps_start, args.eps_decay, args.capacity,
+        ce   = args.cam_embedding,
+        je = args.joint_embedding
     )
 
-    steps, start = 0, 0
-    ckpt_dir  = f"Sim-{args.job_name}/Checkpoints"
-    ckpt_path = f"{ckpt_dir}/brain{args.checkpoint}.pth"
+    steps, start_ep = 0, 0
+    ckpt_dir  = f"LowLevel-{args.job_name}/Checkpoints"
+    ckpt_path = f"{ckpt_dir}/{args.checkpoint}.pth"
     if args.checkpoint and os.path.exists(ckpt_path):
-        steps, start = brain.load_checkpoint(ckpt_path)
+        steps, start_ep = brain.load_checkpoint(ckpt_path)
         print(f"loaded: {ckpt_path}")
     else:
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -162,253 +84,238 @@ def training(args, env, simulation_app):
     if args.wandb:
         wandb.init(
             project="RL for Games",
-            name=f"Sim-{args.job_name}",
+            name=f"LowLevel-{args.job_name}",
             config={k: v for k, v in vars(args).items()
                     if k not in {"job_name"}},
         )
 
-    # ── ALE envs via SyncVectorEnv ────────────────────────────────
-    # AtariPreprocessing + FrameStackObservation handle all preprocessing
-    # obs shape out: [N, 4, 84, 84] float32 — used directly as state
-    ale_envs = gym.vector.SyncVectorEnv(
-        [env_init(42, i) for i in range(N)]
-    )
+    # ── frame stacks — one per env ────────────────────────────────────────────
+    frame_stacks = [Frames(n=4) for _ in range(N)]
 
-    # obs: [N, 4, 84, 84] — states used directly, no Frames/Eyes needed
-    obs, _ = ale_envs.reset()
-    states  = obs.copy()   # [N, 4, 84, 84]
+    # ── curriculum success buffer ─────────────────────────────────────────────
+    # passed to curriculum term so Isaac Lab can compute min success rate
+    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS}
+    
+    current_stage = 0
 
-    # ── Pong display inside Isaac Sim ─────────────────────────────
-    display = PongDisplay(num_envs=N)
+    # ── per-env tracking ──────────────────────────────────────────────────────
+    episode_steps   = np.zeros(N, dtype=int)
+    episode_start_t = [time.time()] * N
+    move_start_t    = [time.time()] * N
+    failsafe_count  = np.zeros(N, dtype=int)
+    episode         = start_ep
+    episode_time    = []
 
-    # ── articulation ──────────────────────────────────────────────
-    so101  = base_env.scene["robot"]
-    object_art = base_env.scene["object"]
-    robots = [RobotSim(env_index=i) for i in range(N)]
+    # decision state storage for n-step buffer push
+    cam_decision   = None
+    joint_decision = None
 
-    def sim_step():
-        base_env.sim.step()
-        base_env.scene.update(base_env.sim.get_physics_dt())
-        simulation_app.update()
+    critic_loss, actor_loss = 0.0, 0.0
 
-    # ── move all arms to home ─────────────────────────────────────
-    batch_move_arms(so101, robots, sim_step, "reset", device)
+    # ── initial reset ─────────────────────────────────────────────────────────
+    obs, _ = env.reset()
 
-    # ── per-env tracking ──────────────────────────────────────────
-    total_rewards = np.zeros(N)
-    episode       = start
-    ep_times      = [time.time()] * N
-    episode_time  = []
-    actions       = [{"all": 0, "up": 0, "down": 0, "neutral": 0}
-                     for _ in range(N)]
-    current_acts  = np.zeros(N, dtype=np.int64)
-    failsafe_Count  = np.zeros(N, dtype=np.int64)
-    failsafe  = np.zeros(N, dtype=np.int64)
-    loss, grad_norm = 0.0, 0.0
-    decision_states = states.copy()
-    pending_reward = np.zeros(N, dtype=np.float64)
-    goal_reward = np.zeros(N, dtype=np.float64)
-    tracking_reward = np.zeros(N, dtype=np.float64)
-    batch_move_arms(so101, robots, sim_step, "home", device)
-    batch_move_arms(so101, robots, sim_step, "neutral", device)
+    update_frame_stack(base_env, frame_stacks, reset_ids=list(range(N)))
+
+    cam_states   = np.stack([fs._get_state() for fs in frame_stacks])
+    joint_states = base_env.scene["robot"].data.joint_pos.cpu().numpy()
+
+    cam_decision   = cam_states.copy()
+    joint_decision = joint_states.copy()
+
     try:
-        with tqdm(total=args.episode, initial=start,
-                  desc="Training", unit="ep") as pbar:
-            while episode < (args.episode + 1):
+        with tqdm(total=args.episodes, initial=start_ep,
+                  desc="LowLevel Training", unit="ep") as pbar:
+            while episode < args.episodes:
+
+                # ── read current commands from Isaac Lab command manager ───────
+                commands = base_env.command_manager.get_command(
+                    "joystick_cmd"
+                ).cpu().numpy()   # [N] int
+
+                # ── action selection via ManipulationBrain ────────────────────
+                actions = np.stack([
+                    brain.predict_next_action(cam_states[i], joint_states[i], steps)
+                    for i in range(N)
+                ]) 
+
+                # ── step Isaac Lab env ────────────────────────────────────────
+                # action manager applies joint targets to SO101 via
+                # JoystickActionTerm — no manual robot_sim.act() needed
+                current_joints = base_env.scene["robot"].data.joint_pos.cpu().numpy()  # [N, 6]
+                target_joints  = current_joints + actions                               # [N, 6]
                 
-                # ── action gating per env ─────────────────────────
-                for i in range(N):
-                    robot    = robots[i]
-                    joystick_input = joystick_registered(object_art, i, robot.task)
-                    timeout = failsafe[i] > 60
+                obs, rewards, terminated, truncated, info = env.step(
+                    torch.tensor(target_joints, dtype=torch.float32, device=device)
+                )
+                dones = terminated | truncated
 
-                    if timeout:
-                        failsafe_Count[i] += 1
-                    if joystick_input or timeout:
-                     
-                        temp = pending_reward[i]
-                        track = 0
-                        ball_y, paddle_y = brain.ball_position(states[i][-1])
-                        if ball_y is not None and paddle_y is not None:
-                            prev_ball_y, prev_paddle_y = brain.ball_position(decision_states[i][-1])
-                            if prev_ball_y is not None and prev_paddle_y is not None:
-                                new_distance  = abs(ball_y  - paddle_y)
-                                prev_distance = abs(prev_ball_y - prev_paddle_y)
-                                if new_distance < prev_distance:
-                                    track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
-                                elif new_distance > prev_distance:
-                                    track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                        clipped_r =float(np.clip((temp*2+track), -2, 2))
+                # ── update frame stacks ───────────────────────────────────────
+                reset_ids = torch.where(dones)[0].cpu().tolist()
+                update_frame_stack(base_env, frame_stacks,
+                                    reset_ids=reset_ids if reset_ids else None)
+
+                cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
+                joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()
+
+                # ── per-env processing ────────────────────────────────────────
+                for i in range(N):
+                    episode_steps[i] += 1
+                    done_i = bool(dones[i].item())
+
+                    # read reward components from Isaac Lab reward manager
+                    # rewards tensor is the combined reward from RewardsCfg
+                    # individual components available via info if needed
+                    combined_reward = brain.normalise_reward(
+                        float(info.get("reward/sparse_success",
+                              torch.zeros(N))[i]),
+                        float(info.get("reward/step_penalty",
+                              torch.zeros(N))[i]),
+                        float(info.get("reward/axis_bonus",
+                              torch.zeros(N))[i]),
+                    )
+
+                    if done_i or episode_steps[i] >= int(
+                        base_env.cfg.episode_length_s * 100
+                    ):
+                        # check if success or timeout
+                        task       = ACT_TO_ZONE[int(commands[i])]
+                        registered = joystick_registered(base_env.scene["object"], i, task)
+
+                        if not registered:
+                            failsafe_count[i] += 1
+
+                        # push to buffer
                         brain.buffer.push(
-                            decision_states[i], int(current_acts[i]),
-                            clipped_r, states[i], False, failsafe[i]
+                            cam_decision[i],
+                            joint_decision[i],
+                            actions[i].copy(),
+                            combined_reward,
+                            cam_next[i],
+                            joint_next[i],
+                            float(registered),
+                            int(episode_steps[i]),
                         )
-                        tracking_reward[i] += track
-                        total_rewards[i] += clipped_r
-                        steps            += 1
-                        pending_reward[i] = 0
-
-                        for _ in range(args.updates):
-                            loss, grad_norm = brain.train()
-                        prediction = predict(ale_envs.envs[i], list(states[i]), int(current_acts[i]), failsafe[i])
-                        act = brain.predict_next_action(prediction, steps, ale_envs)
-                        if act in (2, 4):
-                            robot.task       = "up"
-                            actions[i]["up"] += 1
-                        elif act in (3, 5):
-                            robot.task         = "down"
-                            actions[i]["down"] += 1
-                        else:
-                            robot.task            = "neutral"
-                            actions[i]["neutral"] += 1
-                        actions[i]["all"] += 1
-                        failsafe[i] =0
-                        decision_states[i] = states[i].copy()
-                    current_acts[i] = ZONE_TO_ACT[joystick_zone(object_art, i)]
-                    failsafe[i] += 1
-
-                # ── batched arm command + sim step ────────────────
-                send_targets(so101, robots, device)
-                sim_step()
-
-                # ── step ALL ALE envs at once ─────────────────────
-                # returns [N, 4, 84, 84] obs — used directly as next_states
-                next_obs, rew_batch, term_batch, trunc_batch, _ = \
-                    ale_envs.step(current_acts.copy())
-                dones_batch = term_batch | trunc_batch
-
-                # ── update Pong display ───────────────────────────
-                for i in range(N):
-                    try:
-                        frame = ale_envs.envs[i].render()
-                        display.update(i, frame)
-                    except Exception:
-                        pass
-                simulation_app.update()
-
-                # ── per-env processing ────────────────────────────
-                for i in range(N):
-                    done_i   = bool(dones_batch[i])
-                    rew      = float(rew_batch[i])
-                    goal_reward[i] += rew
-                    #tracking
-                    track = 0
-                    ball_y, paddle_y = brain.ball_position(states[i][-1])
-                    if ball_y is not None and paddle_y is not None:
-                        prev_ball_y, prev_paddle_y = brain.ball_position(decision_states[i][-1])
-                        if prev_ball_y is not None and prev_paddle_y is not None:
-                            new_distance  = abs(ball_y  - paddle_y)
-                            prev_distance = abs(prev_ball_y - prev_paddle_y)
-                            if new_distance < prev_distance:
-                                track += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
-                            elif new_distance > prev_distance:
-                                track -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                    clipped_r = float(np.clip(np.sign(rew*2+track), -2, 2))
-                    tracking_reward[i] += track
-                    pending_reward[i] += (brain.gamma ** failsafe[i]) * clipped_r
-                    # print("pending reward ", pending_reward[i])
-                    # ── episode end ───────────────────────────────
-                    if steps % 200 == 0:
-                            priorities = brain.buffer.priorities[:len(brain.buffer)]
-                            wandb.log({
-                                "buffer/priority_max":  priorities.max(),
-                                "buffer/priority_min":  priorities.min(),
-                                "buffer/priority_mean": priorities.mean(),
-                                "buffer/priority_std":  priorities.std(),
-                            }, step=steps)
-                    if done_i:
-                        # reward + buffer
-                        brain.buffer.push(
-                            decision_states[i], int(current_acts[i]),
-                            clipped_r, next_obs[i], True, failsafe[i]
-                        )
-                        total_rewards[i] += clipped_r
-                        steps            += 1
+                        steps += 1
 
                         # train
-                        for _ in range(args.updates):
-                            loss, grad_norm = brain.train()
-                            
-                        batch_move_arm(so101, robots[i], sim_step, "neutral", device)
-                        ep_time = time.time() - ep_times[i]
+                        critic_loss, actor_loss = brain.train()
+
+                        # movement time
+                        move_time = time.time() - move_start_t[i]
+                        ep_time   = time.time() - episode_start_t[i]
                         episode_time.append(ep_time)
                         eta = np.mean(episode_time[-100:]) * \
-                              (args.episode - episode - 1)
+                              (args.episodes - episode - 1)
 
-                        if episode % args.mid_save == 0 and episode != 0:
-                            brain.save_checkpoint(
-                                episode, steps, f"Sim-{args.job_name}"
-                            )
-                        if episode % args.full_save == 0 and episode != 0:
-                            brain.save(f"Sim-{args.job_name}")
+                        # update curriculum success buffer
+                        cmd_i = int(commands[i])
+                        command_success_buf[cmd_i].append(registered)
+
+                        # check curriculum stage change
+                        min_rate = min(
+                            sum(command_success_buf[c]) /
+                            max(len(command_success_buf[c]), 1)
+                            for c in ALL_COMMANDS
+                        )
+                        if min_rate >= UPPER_THRESHOLD and current_stage < 2:
+                            current_stage += 1
+                            base_env.cfg.episode_length_s = \
+                                STAGE_EPISODE_LENGTHS[current_stage]
+                            # update event term randomisation range
+                            _update_curriculum_stage(base_env, current_stage)
+                            print(f"curriculum advanced to stage {current_stage}",
+                                  flush=True)
+                        elif (1.0 - min_rate) >= LOWER_THRESHOLD \
+                                and current_stage > 0:
+                            current_stage -= 1
+                            base_env.cfg.episode_length_s = \
+                                STAGE_EPISODE_LENGTHS[current_stage]
+                            _update_curriculum_stage(base_env, current_stage)
+                            print(f"curriculum regressed to stage {current_stage}",
+                                  flush=True)
+
+                        # wandb
+                        if args.wandb:
+                            per_cmd_rates = {
+                                f"success_rate/{CMD_NAMES[c]}":
+                                    sum(command_success_buf[c]) /
+                                    max(len(command_success_buf[c]), 1)
+                                for c in ALL_COMMANDS
+                            }
+                            wandb.log({
+                                "train/critic_loss": critic_loss,
+                                "train/actor_loss":  actor_loss,
+                                "train/alpha":       brain.alpha.item(),
+                                "train/buffer_size":     len(brain.buffer),
+                                "train/steps":           steps,
+                                "episode/success":       float(registered),
+                                "episode/steps_taken":   episode_steps[i],
+                                "episode/episode_time":  ep_time,
+                                "episode/move_time":     move_time,
+                                "episode/command":       CMD_NAMES.get(
+                                                             cmd_i, str(cmd_i)),
+                                "episode/failsafe":      failsafe_count[i],
+                                "episode/episode":       episode,
+                                "curriculum/stage":      current_stage,
+                                "curriculum/min_rate":   min_rate,
+                                "curriculum/ep_length":
+                                    base_env.cfg.episode_length_s,
+                                **per_cmd_rates,
+                            }, step=steps)
 
                         pbar.set_postfix({
-                            "env":    i,
-                            "ep":     episode,
-                            "loss":   f"{loss:.4f}",
-                            "reward": f"{total_rewards[i]:.1f}",
-                            "eps":    f"{brain.eps:.3f}",
-                            "eta":    format_time(eta),
+                            "ep":      episode,
+                            "cmd":     CMD_NAMES.get(cmd_i, str(cmd_i)),
+                            "success": registered,
+                            "steps":   episode_steps[i],
+                            "stage":   current_stage,
+                            "eta":     format_time(eta),
                         })
                         pbar.update(1)
 
                         print(
                             f"\n[EP {episode}] env={i} | "
-                            f"reward={total_rewards[i]:.1f} | "
-                            f"loss={loss:.4f} | "
-                            f"eps={brain.eps:.3f} | "
+                            f"cmd={CMD_NAMES.get(cmd_i, str(cmd_i))} | "
+                            f"success={registered} | "
+                            f"steps={episode_steps[i]} | "
+                            f"stage={current_stage} | "
+                            f"move_time={move_time:.2f}s | "
+                            f"min_rate={min_rate:.2f} | "
                             f"eta={format_time(eta)}",
                             flush=True,
                         )
-                        
-                        if args.wandb:
-                            wandb.log({
-                                "train/loss":          loss,
-                                "train/grad_norm":     grad_norm,
-                                "train/epsilon":       brain.eps,
-                                "train/buffer_size":   len(brain.buffer),
-                                "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                                "train/episode": episode,
-                                "episode/total_reward":       total_rewards[i],
-                                "episode/pending_reward":       pending_reward[i],
-                                "episode/goal_reward":       goal_reward[i],
-                                "episode/tracking_reward":       tracking_reward[i],
-                                "episode/RL_action_all":      actions[i]["all"],
-                                "episode/RL_actions_up":      actions[i]["up"],
-                                "episode/RL_actions_down":    actions[i]["down"],
-                                "episode/RL_actions_neutral": actions[i]["neutral"],
-                                "episode/failsafe": failsafe_Count[i]
-                            }, step=steps)
 
+                        if episode % args.mid_save == 0 and episode != 0:
+                            brain.save_checkpoint(
+                                episode, steps,
+                                f"LowLevel-{args.job_name}/Checkpoints"
+                            )
+                        if episode % args.full_save == 0 and episode != 0:
+                            brain.save_checkpoint(
+                                episode, steps,
+                                f"LowLevel-{args.job_name}/Full"
+                            )
 
                         # reset per-env trackers
-                        total_rewards[i]  = 0.0
-                        tracking_reward[i]  = 0.0
-                        goal_reward[i] = 0
-                        robots[i].actions = {"all": 0, "up": 0,
-                                             "down": 0, "neutral": 0}
-                        actions[i]        = {"all": 0, "up": 0,
-                                             "down": 0, "neutral": 0}
-                        current_acts[i]   = 0
-                        ep_times[i]       = time.time()
-                        episode          += 1
+                        episode_steps[i]   = 0
+                        failsafe_count[i]  = 0
+                        episode_start_t[i] = time.time()
+                        move_start_t[i]    = time.time()
+                        episode           += 1
 
-                        # SyncVectorEnv auto-resets done envs
-                        # next_obs[i] is already the fresh reset obs
-                        states[i] = next_obs[i]
-                        failsafe_Count[i] = 0
-                        decision_states[i] = next_obs[i].copy()
+                        # update decision state reference
+                        cam_decision[i]   = cam_next[i].copy()
+                        joint_decision[i] = joint_next[i].copy()
 
-                        robots[i].task = "neutral"
-
-                    else:
-                        states[i] = next_obs[i]
-
+                # update states for next step
+                cam_states   = cam_next
+                joint_states = joint_next
 
     except KeyboardInterrupt:
         print("\nclosing")
-        ale_envs.close()
-        if args.wandb:wandb.finish()
+        if args.wandb:
+            wandb.finish()
 
     except Exception as e:
         import traceback
@@ -424,20 +331,27 @@ def training(args, env, simulation_app):
                 "crash/steps":         steps,
             })
             wandb.alert(
-                title=f"Sim crashed — {type(e).__name__}",
+                title=f"LowLevel crashed — {type(e).__name__}",
                 text=f"Episode {episode} | Steps {steps}\n\n{crash}",
                 level=wandb.AlertLevel.ERROR,
             )
-            ale_envs.close()
             wandb.finish(exit_code=1)
         raise
 
-    if args.wandb:wandb.finish()
-    ale_envs.close()
+
+def _update_curriculum_stage(base_env, stage: int):
+    """Update event term randomisation range when stage changes."""
+    stage_params = {
+        0: {"pos_range": 0.00, "rot_range": 0.00},
+        1: {"pos_range": 0.05, "rot_range": 0.05},
+        2: {"pos_range": 0.15, "rot_range": 0.15},
+    }
+    params = stage_params.get(stage, stage_params[0])
+    base_env.cfg.events.reset_controller.params.update(params)
 
 
 def main():
-
+    import sim.tasks.joystick.play_env_cfg as _cfg_module
 
     env_cfg = parse_env_cfg(
         args_cli.task,
@@ -452,9 +366,8 @@ def main():
 
     training(args_cli, env, simulation_app)
     env.close()
-    simulation_app.close()
 
 
 if __name__ == "__main__":
     main()
-    
+    simulation_app.close()

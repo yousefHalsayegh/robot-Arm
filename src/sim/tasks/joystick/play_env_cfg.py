@@ -11,9 +11,10 @@
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
-
+import torch 
+import numpy as np
 # from . import mdp
-import sim.tasks.play.mdp as mdp
+import sim.tasks.joystick.mdp as mdp
 from isaaclab.assets import (
     ArticulationCfg,
     AssetBaseCfg,
@@ -28,27 +29,211 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.managers import ActionTermCfg as ActTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.managers import CommandTermCfg as ComTerm
+from isaaclab.managers import CommandTerm, ActionTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sensors import CameraCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from scipy.spatial.transform import Rotation
+from isaaclab.utils.math import quat_mul
 ##check how to implement this 
 #from isaac_so_arm101.utils.domain_randomization import domain_randomization, randomize_object_uniform
 
-
+# arcade stick default pose from joint_pos_env_cfg.py InitialStateCfg
+STICK_DEFAULT_POS = [0.3, -0.052, 0.0]
+STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
+ 
+# curriculum episode lengths — step down 0.5s per stage
+STAGE_EPISODE_LENGTHS = {0: 5.0, 1: 4.5, 2: 4.0, 3:3.5, 4:3.0, 5:2.5, 6:2.0, 7:1.5, 8:1.0}
+ 
+# curriculum thresholds
+UPPER_THRESHOLD = 0.80
+LOWER_THRESHOLD = 0.50
+WINDOW_SIZE     = 100
+ 
+# discrete command integer codes — must match rewards.py
+CMD_NEUTRAL = 0
+CMD_UP      = 2
+CMD_DOWN    = 3
+CMD_LEFT    = 4
+CMD_RIGHT   = 5
+ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT]
 ##
 # Scene definition
 ##
 
-def rot_cal(x_deg, y_deg, z_deg):
-    target   = Rotation.from_euler('xyz', [x_deg, y_deg, z_deg], degrees=True)
-    offset   = Rotation.from_euler('xyz', [90, 90, 0], degrees=True)
-    result   = target * offset.inv()
-    x, y, z, w = result.as_quat()
-    return (w, x, y, z)
+class JoystickActionTerm(ActionTerm):
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self._actions = torch.zeros(
+            env.num_envs, 1, dtype=torch.long, device=env.device
+        )
+
+    @property
+    def action_dim(self) -> int:
+        return 6
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return self._actions
+
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self._actions
+
+    def process_actions(self, actions: torch.Tensor):
+        self._actions = actions
+
+    def apply_actions(self):
+        robot = self._env.scene[self.cfg.asset_name]
+        # self._actions is now [N, 6] float — target joint positions
+        robot.set_joint_position_target(self._actions.float())
+        robot.write_data_to_sim()
+
+@configclass
+class JoystickActionTermCfg(ActTerm):
+    class_type: type = JoystickActionTerm   # set below
+    asset_name: str = "robot"
+ 
+ 
+# ── command term — samples discrete joystick commands per episode ─────────────
+
+class JoystickCommandTerm(CommandTerm):
+    """
+    Samples one of 5 discrete joystick commands uniformly at episode reset.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self._command = torch.zeros(
+            env.num_envs, dtype=torch.long, device=env.device
+        )
+
+    def __str__(self) -> str:
+        return f"JoystickCommandTerm | envs: {self.num_envs}"
+    
+    def _resample_command(self, env_ids: torch.Tensor):
+        """Sample a new random command for the given env indices."""
+        sampled = torch.tensor(
+            np.random.choice(ALL_COMMANDS, size=len(env_ids)),
+            dtype=torch.long,
+            device=self.device,
+        )
+        self._command[env_ids] = sampled
+
+    def _update_command(self):
+        """Called every step — no update needed for episode-level commands."""
+        pass
+
+    def _update_metrics(self):
+        """Called every step to update any logged metrics — nothing to track."""
+        pass
+
+    @property
+    def command(self) -> torch.Tensor:
+        """Current command tensor — [num_envs] int."""
+        return self._command
+
+    # ── command_b required by CommandTerm ─────────────────────────────────────
+    @property
+    def command_b(self) -> torch.Tensor:
+        return self._command
+
+@configclass
+class JoystickCommandTermCfg(ComTerm):
+    class_type: type = JoystickCommandTerm      # set below after class definition
+    resampling_time_range: tuple = (0.0, 0.0)
+    debug_vis: bool = False
+
+# ── curriculum term — minimum success rate across all 5 commands ──────────────
+ 
+def min_command_success_rate(
+    env,
+    env_ids: torch.Tensor,
+    command_success_buf: dict,   # passed from training script via params
+) -> torch.Tensor:
+    """
+    Returns the minimum success rate across all 5 command types.
+    Curriculum advances when this exceeds UPPER_THRESHOLD,
+    regresses when below (1 - LOWER_THRESHOLD).
+ 
+    command_success_buf is a dict {cmd_int: deque of bool} maintained
+    by the training script and passed as a parameter.
+    """
+    rates = []
+    for cmd in ALL_COMMANDS:
+        history = command_success_buf.get(cmd, [])
+        if len(history) < WINDOW_SIZE:
+            rates.append(0.0)   # window not full — do not advance
+        else:
+            rates.append(sum(history) / len(history))
+    return torch.tensor(min(rates), device=env.device)
+ 
+ 
+def update_episode_length(env, stage: int):
+    """Called by curriculum manager when stage changes."""
+    new_length = STAGE_EPISODE_LENGTHS.get(stage, 5.0)
+    env.cfg.episode_length_s = new_length
+ 
+ 
+# ── event term — controller position randomisation ────────────────────────────
+ 
+def randomise_controller_pose(
+    env,
+    env_ids:    torch.Tensor,
+    pos_range:  float = 0.0,
+    rot_range:  float = 0.0,
+):
+    """
+    Resets the arcade stick to its default pose with a random offset.
+    Range parameters are updated by the curriculum manager.
+ 
+    Default pose from InitialStateCfg:
+        pos = [0.3, -0.052, 0.0]
+        rot = [0.7071068, 0.0, 0.0, -0.7071068]  (w, x, y, z)
+    """
+
+ 
+    object_art = env.scene["object"]
+    device     = env.device
+    N          = len(env_ids)
+ 
+    # default pose
+    default_pos = torch.tensor(
+        STICK_DEFAULT_POS, dtype=torch.float32, device=device
+    ).unsqueeze(0).repeat(N, 1)
+ 
+    default_rot = torch.tensor(
+        STICK_DEFAULT_ROT, dtype=torch.float32, device=device
+    ).unsqueeze(0).repeat(N, 1)
+ 
+    if pos_range > 0.0:
+        # uniform offset in XY plane only — Z kept fixed
+        offset_xy = (torch.rand(N, 2, device=device) * 2 - 1) * pos_range
+        offset    = torch.zeros(N, 3, device=device)
+        offset[:, :2] = offset_xy
+        default_pos   = default_pos + offset
+ 
+    if rot_range > 0.0:
+        # yaw-only rotation offset around vertical axis
+        yaw_offset = (torch.rand(N, device=device) * 2 - 1) * rot_range
+        cos_h = torch.cos(yaw_offset / 2)
+        sin_h = torch.sin(yaw_offset / 2)
+        yaw_quat = torch.stack(
+            [cos_h, torch.zeros_like(cos_h),
+             torch.zeros_like(cos_h), sin_h], dim=1
+        )
+        default_rot = quat_mul(default_rot, yaw_quat)
+ 
+    object_art.write_root_pose_to_sim(
+        torch.cat([default_pos, default_rot], dim=1),
+        env_ids=env_ids,
+    )
 
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
@@ -106,61 +291,31 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 class CommandsCfg:
     """Command terms for the MDP."""
 
-    object_pose = mdp.UniformPoseCommandCfg(
-        asset_name="robot",
-        body_name=MISSING,  # will be set by agent env cfg
-        resampling_time_range=(5.0, 5.0),
-        debug_vis=False,
-        ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(-0.1, 0.1),
-            pos_y=(-0.3, -0.1),
-            pos_z=(0.2, 0.35),
-            roll=(0.0, 0.0),
-            pitch=(0.0, 0.0),
-            yaw=(0.0, 0.0),
-        ),
-    )
+    joystick_cmd = JoystickCommandTermCfg(
+            debug_vis=False,
+        )
 
 
 @configclass
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    # will be set by agent env cfg
-    arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg = MISSING
-    gripper_action: mdp.BinaryJointPositionActionCfg = MISSING
-
+    joystick = JoystickActionTermCfg(
+            asset_name="robot",
+        )
 
 @configclass
 class ObservationsCfg:
-    """Observation specifications for the MDP."""
-
-    @configclass
-    class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
-
-        joint_pos = ObsTerm(func=mdp.joint_pos)
-        joint_vel = ObsTerm(func=mdp.joint_vel)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
-
-        #need to recheck wtf is this
-        # wrist = ObsTerm(
-        #     func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist"), "data_type": "rgb", "normalize": False}
-        # )
-        # front = ObsTerm(
-        #     func=mdp.image, params={"sensor_cfg": SceneEntityCfg("front"), "data_type": "rgb", "normalize": False}
-        # )
-    
-
-        actions = ObsTerm(func=mdp.last_action)
-
-        def __post_init__(self):
-            self.enable_corruption = True
-            self.concatenate_terms = False
-
-    # observation groups
-    policy: PolicyCfg = PolicyCfg()
+        @configclass
+        class PolicyCfg(ObsGroup):
+            joint_pos = ObsTerm(
+                func=mdp.joint_pos_rel,
+                params={"asset_cfg": SceneEntityCfg("robot")},
+            )
+            enable_corruption = False
+ 
+        policy: PolicyCfg = PolicyCfg()
+ 
 
 
 @configclass
@@ -174,20 +329,42 @@ class TerminationsCfg:
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
+    parse_success = RewTerm(
+            func=mdp.sparse,
+            weight=1.0,
+            params={"weight": 1.0},
+        )
+    step_penalty = RewTerm(
+            func=mdp.step_penalty,
+            weight=1.0,
+            params={
+                "current_budget":500,   # 5s * 100Hz / decimation
+                "weight": 0.1,
+            },
+        )
+    axis_bonus = RewTerm(
+            func=mdp.axis_bonus,
+            weight=0.1,
+            params={"weight": 0.5},
+        )
 
+# @configclass
+# class CurriculumCfg:
+#         joystick_curriculum = CurrTerm(
+#             func=min_command_success_rate,
+#             params={"command_success_buf": {}},  
+#         )
 
-    reach_reward = RewTerm(func=mdp.sparse, params={
-        "std": 0.05,
-    }, weight=1.0)
-
-    steps_reward = RewTerm(func=mdp.axis_bonus, params={
-        "touch": 0.05
-    }, weight=0.1)
-
-    penality = RewTerm(func=mdp.step_penalty, params={
-        "touch": 0.05
-    }, weight=0.05)
-    
+@configclass
+class EventCfg:
+        reset_controller = EventTerm(
+            func=randomise_controller_pose,
+            mode="reset",
+            params={
+                "pos_range": 0.0,   # Stage 0: fixed position
+                "rot_range": 0.0,
+            },
+        )
 
 @configclass
 class PlayEnvCfg(ManagerBasedRLEnvCfg):
@@ -202,13 +379,15 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     terminations: TerminationsCfg = TerminationsCfg()
     rewards : RewardsCfg = RewardsCfg()
+    # curriculum: CurriculumCfg = CurriculumCfg()
+    events: EventCfg = EventCfg()
 
 
     def __post_init__(self):
         """Post initialization."""
         # general settings
         self.decimation = 1
-        self.episode_length_s = 15.0
+        self.episode_length_s = 30.0
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 0.01  # 100Hz

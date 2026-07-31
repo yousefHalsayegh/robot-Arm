@@ -22,20 +22,22 @@ class Frames():
 
     def preprocess(self, rgb, depth):
 
-        rgb_resized = cv2.resize(rgb, (TARGET_W, TARGET_H), interpolation=cv2.INER_LINEAR)
-        rgb_normalized = rgb_resized.astype(np.float32)/255.0
+        rgb_resized   = cv2.resize(rgb, (TARGET_W, TARGET_H))
+        rgb_norm      = rgb_resized.astype(np.float32) / 255.0
 
         if depth.ndim == 3:
-            depth = depth[:,:,0]
+            depth = depth[:, :, 0]
+        depth_resized = cv2.resize(depth, (TARGET_W, TARGET_H))
+        depth_resized = np.nan_to_num(depth_resized, nan=2.0, posinf=2.0, neginf=0.1)
 
-        depth_resized = cv2.resize(depth, (TARGET_W, TARGET_H), interpolation=cv2.INER_LINEAR)
-        depth_resized = depth_resized.astype(np.float32)
+        # clip depth to working range and normalise to [0, 1]
+        # 0.1m to 2.0m covers the manipulation workspace
+        depth_clipped = np.clip(depth_resized, 0.1, 2.0)
+        depth_norm    = (depth_clipped - 0.1) / (2.0 - 0.1)
+        depth_norm    = depth_norm.astype(np.float32)
 
-        rgbd = np.concatenate(
-            [rgb_normalized, depth_resized[:, :, np.newaxis]], axis=-1
-        )
-
-        return rgbd.transpose(2,0,1)
+        rgbd = np.concatenate([rgb_norm, depth_norm[:, :, np.newaxis]], axis=-1)
+        return rgbd.transpose(2, 0, 1)
     
     def reset(self, rgb, depth):
         proc = self.preprocess(rgb, depth)
@@ -70,7 +72,7 @@ def update_frame_stack(env, frames, reset_ids):
 
     camera = env.scene["side"]
     rgb_batch = camera.data.output["rgb"].cpu().numpy()
-    depth_batch = camera.data.output["distance_to_image_plane"].cpu().nump()
+    depth_batch = camera.data.output["distance_to_image_plane"].cpu().numpy()
 
     reset = set(reset_ids) if reset_ids else set()
 

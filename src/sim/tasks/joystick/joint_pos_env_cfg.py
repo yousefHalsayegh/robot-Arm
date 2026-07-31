@@ -23,7 +23,7 @@ from isaaclab.sim.schemas import ArticulationRootPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.utils import configclass
 from sim.robots import  SO_ARM101_CFG  # noqa: F401
-from sim.tasks.play.play_env_cfg import PlayEnvCfg
+from sim.tasks.joystick.play_env_cfg import PlayEnvCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 
 
@@ -38,20 +38,18 @@ class SoArm101LiftCubeEnvCfg(PlayEnvCfg):
         self.scene.robot = SO_ARM101_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         # override actions
-        self.actions.arm_action = mdp.JointPositionActionCfg(
-            asset_name="robot",
-            joint_names=["shoulder_.*", "elbow_flex", "wrist_.*"],
-            scale=0.5,
-            use_default_offset=True,
-        )
-        self.actions.gripper_action = mdp.BinaryJointPositionActionCfg(
-            asset_name="robot",
-            joint_names=["gripper"],
-            open_command_expr={"gripper": 0.5},
-            close_command_expr={"gripper": 0.0},
-        )
-        # Set the body name for the end effector
-        self.commands.object_pose.body_name = ["gripper_link"]
+        # self.actions.arm_action = mdp.JointPositionActionCfg(
+        #     asset_name="robot",
+        #     joint_names=["shoulder_.*", "elbow_flex", "wrist_.*"],
+        #     scale=0.5,
+        #     use_default_offset=True,
+        # )
+        # self.actions.gripper_action = mdp.BinaryJointPositionActionCfg(
+        #     asset_name="robot",
+        #     joint_names=["gripper"],
+        #     open_command_expr={"gripper": 0.5},
+        #     close_command_expr={"gripper": 0.0},
+        # )
 
         # Set the arcade stick as an object
         self.scene.object = ArticulationCfg(

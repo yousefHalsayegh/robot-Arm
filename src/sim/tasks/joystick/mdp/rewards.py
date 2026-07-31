@@ -21,8 +21,8 @@ ACT_TO_ZONE = {v: k for k, v in ZONE_TO_ACT.items()}
 DEADZONE_DEG = 6.5 
 
 # joint order from your earlier print: ['PivotY', 'PivotX']
-PIVOT_Y_IDX = 0
-PIVOT_X_IDX = 1
+PIVOT_Y_IDX = 1
+PIVOT_X_IDX = 0
 
 CMD_NEUTRAL = 0
 CMD_UP      = 2
@@ -69,9 +69,10 @@ def joystick_registered(object_art, env_index, task):
 
 #Reward Functions
 
-def sparse(env, commands, weight=1.0) -> torch.Tensor:
+def sparse(env, weight=1.0) -> torch.Tensor:
     
     object = env.scene["object"]
+    commands = env.command_manager.get_command("joystick_cmd")
 
     reward = torch.zeros(env.num_envs, device=env.device)
 
@@ -83,13 +84,19 @@ def sparse(env, commands, weight=1.0) -> torch.Tensor:
     return reward
 
 
-def step_penalty(env, current_budget, weigth=1.0) -> torch.Tensor:
-    safe = current_budget.clamp(min=1.0)
+def step_penalty(env, current_budget=10, weight=1.0) -> torch.Tensor:
 
-    return (weigth/safe)
+    safe_budget = max(current_budget, 1.0)
+    penalty     = -(weight / safe_budget)
+    # return tensor on correct device
+    return torch.full(
+        (env.num_envs,), penalty,
+        dtype=torch.float32, device=env.device
+    )
 
-def axis_bonus(env, commands, weight=1.0) -> torch.Tensor:
-    
+def axis_bonus(env, weight=1.0) -> torch.Tensor:
+
+    commands = env.command_manager.get_command("joystick_cmd")
     object = env.scene["object"]
 
     reward = torch.zeros(env.num_envs, device=env.device)
