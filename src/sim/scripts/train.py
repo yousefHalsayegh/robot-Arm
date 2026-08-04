@@ -31,11 +31,11 @@ import torch
 import wandb
 from collections import deque
 from tqdm import tqdm
-
+import pickle
 import gymnasium as gym
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
-
+from sim.scripts.fill_buffer import generate
 from sim.utils.robo_brain import Brain
 
 from sim.tasks.joystick.mdp.observations import (
@@ -72,7 +72,7 @@ def training(args, env, simulation_app):
     )
 
     steps, start_ep = 0, 0
-    ckpt_dir  = f"LowLevel-{args.job_name}/Checkpoints"
+    ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
     ckpt_path = f"{ckpt_dir}/{args.checkpoint}.pth"
     if args.checkpoint and os.path.exists(ckpt_path):
         steps, start_ep = brain.load_checkpoint(ckpt_path)
@@ -80,6 +80,8 @@ def training(args, env, simulation_app):
     else:
         os.makedirs(ckpt_dir, exist_ok=True)
         print("no checkpoint, starting fresh")
+
+    
 
     if args.wandb:
         wandb.init(
@@ -91,6 +93,16 @@ def training(args, env, simulation_app):
 
     # ── frame stacks — one per env ────────────────────────────────────────────
     frame_stacks = [Frames(n=4) for _ in range(N)]
+
+    prefill_path = "buffer_prefill.pkl"
+    if os.path.exists(prefill_path):
+        with open(prefill_path, "rb") as f:
+            brain.buffer = pickle.load(f)
+        print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
+    else:
+        generate(env, simulation_app, brain.buffer, frame_stacks)
+        with open(args_cli.output_path, "wb") as f:
+                pickle.dump(brain.buffer, f)
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate

@@ -17,6 +17,7 @@ zero_agent = "sim.scripts.zero_agent:main"
 random_agent = "sim.scripts.random_agent:main"
 play = "sim.scripts.generate:main"
 train = "sim.scripts.train:main"
+buffer = "sim.scripts.fill_buffer:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

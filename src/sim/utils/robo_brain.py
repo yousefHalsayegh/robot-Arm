@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import os
 import torch.nn as nn
-import torch.nn.functional as f
+import torch.nn.functional as F
 from collections import namedtuple
 from random import random
 import torch.optim as optim

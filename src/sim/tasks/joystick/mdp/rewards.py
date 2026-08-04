@@ -29,6 +29,7 @@ CMD_UP      = 2
 CMD_DOWN    = 3
 CMD_LEFT    = 4
 CMD_RIGHT   = 5
+CMD_HOME    = 0
 
 def joystick_zone(object_art, env_index):
     """Classify the joystick's CURRENT physical position into a zone,

@@ -68,7 +68,7 @@ def joint_positions(env) -> torch.Tenosr:
 
 #helper
 
-def update_frame_stack(env, frames, reset_ids):
+def update_frame_stack(env, frames, reset_ids=None):
 
     camera = env.scene["side"]
     rgb_batch = camera.data.output["rgb"].cpu().numpy()
