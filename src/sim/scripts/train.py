@@ -138,7 +138,7 @@ def training(args, env, simulation_app):
         with tqdm(total=args.episodes, initial=start_ep,
                   desc="LowLevel Training", unit="ep") as pbar:
             while episode < args.episodes:
-
+                start_t = time.time()
                 # ── read current commands from Isaac Lab command manager ───────
                 commands = base_env.command_manager.get_command(
                     "joystick_cmd"
@@ -160,9 +160,10 @@ def training(args, env, simulation_app):
 
                 # ── update frame stacks ───────────────────────────────────────
                 reset_ids = torch.where(dones)[0].cpu().tolist()
+                camera_time = time.time()
                 update_frame_stack(base_env, frame_stacks,
                                     reset_ids=reset_ids if reset_ids else None)
-
+                camera_time = abs(camera_time - time.time())
                 cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
                 joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()
 
@@ -190,7 +191,7 @@ def training(args, env, simulation_app):
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS) or done_i or timeout_i
 
                     if decision_boundary:
-                        
+
                         brain.buffer.push(
                                     (cam_decision[i] * 255).round().astype(np.uint8),
                                     joint_decision[i],
@@ -235,7 +236,6 @@ def training(args, env, simulation_app):
                         
 
                         # movement time
-                        move_time = time.time() - move_start_t[i]
                         ep_time   = time.time() - episode_start_t[i]
                         episode_time.append(ep_time)
 
@@ -279,11 +279,14 @@ def training(args, env, simulation_app):
                                 "train/actor_loss":  actor_loss,
                                 "train/alpha":       brain.alpha.item(),
                                 "train/buffer_size":     len(brain.buffer),
+                                "train/norm_var": {brain.norm_success.var, brain.norm_penalty.var, brain.norm_bonus.var},
+                                "train/norm_count": {brain.norm_success.count, brain.norm_penalty.count, brain.norm_bonus.count},
                                 "train/steps":           steps,
+                                "episode/episode_return": episode_return[i],
+                                "episode/combined_reward": combined_reward,
                                 "episode/success":       float(registered),
                                 "episode/steps_taken":   episode_steps[i],
-                                "episode/episode_time":  ep_time,
-                                "episode/move_time":     move_time,
+                                "episode/episode_time_s":  ep_time,
                                 "episode/command":       CMD_NAMES.get(
                                                              cmd_i, str(cmd_i)),
                                 "episode/episode":       episode,
@@ -306,7 +309,15 @@ def training(args, env, simulation_app):
                                 episode, steps,
                                 f"LowLevel-{args.job_name}/Full"
                             )
-
+                        pbar.set_postfix({
+                            "steps": steps, 
+                            "ep":      episode,
+                            "critic_loss" : critic_loss,
+                            "actor_loss" : actor_loss,
+                            "alpha" : brain.alpha.item(),
+                            "buffer_capacity": len(brain.buffer)
+                        })
+                        pbar.update(1)
                         # reset per-env trackers
                         episode_steps[i]   = 0
                         episode_start_t[i] = time.time()
@@ -321,15 +332,7 @@ def training(args, env, simulation_app):
                 # update states for next step
                 cam_states   = cam_next
                 joint_states = joint_next
-                pbar.set_postfix({
-                    "steps": steps, 
-                    "ep":      episode,
-                    "critic_loss" : critic_loss,
-                    "actor_loss" : actor_loss,
-                    "alpha" : brain.alpha.item(),
-                    "buffer_capacity": len(brain.buffer)
-                })
-                pbar.update(1)
+                print(f"time taken {abs(start_t - time.time)} camera took {camera_time}")
 
 
     except KeyboardInterrupt:
