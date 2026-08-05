@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 DEADZONE_DEG = 6.5 
-
+DISPLACEMENT_THRESHOLD_DEG = 10.0 
 # joint order from your earlier print: ['PivotY', 'PivotX']
 PIVOT_Y_IDX = 1 #left and right
 PIVOT_X_IDX = 0 #up and down

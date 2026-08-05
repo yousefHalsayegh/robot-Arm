@@ -45,7 +45,10 @@ from sim.tasks.joystick.play_env_cfg import (
     ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT,
     UPPER_THRESHOLD, LOWER_THRESHOLD, WINDOW_SIZE, STAGE_EPISODE_LENGTHS,
 )
-from sim.tasks.joystick.mdp.rewards import joystick_registered, ACT_TO_ZONE
+from sim.tasks.joystick.mdp.rewards import (
+    joystick_registered, ACT_TO_ZONE, DISPLACEMENT_THRESHOLD_DEG,
+    PIVOT_Y_IDX, PIVOT_X_IDX
+)
 
 CMD_NAMES = {
     CMD_NEUTRAL: "neutral", CMD_UP: "up",
@@ -120,6 +123,7 @@ def training(args, env, simulation_app):
     action_decision = None
     episode_return = np.zeros(N, dtype=np.float32)
     decision_steps = np.zeros(N, dtype=int)
+    max_displacement = np.zeros(N, dtype=np.float32)
     critic_loss, actor_loss = 0.0, 0.0
 
     # ── initial reset ─────────────────────────────────────────────────────────
@@ -175,6 +179,9 @@ def training(args, env, simulation_app):
                     episode_steps[i] += 1
                     decision_steps[i] += 1
                     done_i = bool(dones[i].item())
+                    tilt_deg = np.rad2deg(base_env.scene["object"].data.joint_pos[i].cpu().numpy())
+                    x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
+                    max_displacement[i] = max(max_displacement[i], abs(x_deg), abs(y_deg))
 
                     # read reward components from Isaac Lab reward manager
                     # rewards tensor is the combined reward from RewardsCfg
@@ -217,7 +224,8 @@ def training(args, env, simulation_app):
                         # check if success or timeout
                         task       = ACT_TO_ZONE[int(commands[i])]
                         registered = joystick_registered(base_env.scene["object"], i, task)
-
+                        if task == "neutral":
+                            registered = registered and (max_displacement[i] > DISPLACEMENT_THRESHOLD_DEG)
                         # push to buffer
                         brain.buffer.push(
                             (cam_decision[i] * 255).round().astype(np.uint8),
