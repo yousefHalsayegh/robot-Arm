@@ -287,8 +287,12 @@ def training(args, env, simulation_app):
                                 "train/actor_loss":  actor_loss,
                                 "train/alpha":       brain.alpha.item(),
                                 "train/buffer_size":     len(brain.buffer),
-                                "train/norm_var": {brain.norm_success.var, brain.norm_penalty.var, brain.norm_bonus.var},
-                                "train/norm_count": {brain.norm_success.count, brain.norm_penalty.count, brain.norm_bonus.count},
+                                "train/norm_var_success": brain.norm_success.var, 
+                                "train/norm_var_penalty": brain.norm_penalty.var, 
+                                "train/norm_var_bonus":   brain.norm_bonus.var,
+                                "train/norm_count_success": brain.norm_success.count, 
+                                "train/norm_count_penalty": brain.norm_penalty.count, 
+                                "train/norm_count_bonus": brain.norm_bonus.count,
                                 "train/steps":           steps,
                                 "episode/episode_return": episode_return[i],
                                 "episode/combined_reward": combined_reward,
@@ -296,7 +300,7 @@ def training(args, env, simulation_app):
                                 "episode/steps_taken":   episode_steps[i],
                                 "episode/episode_time_s":  ep_time,
                                 "episode/command":       CMD_NAMES.get(
-                                                             cmd_i, str(cmd_i)),
+                                                                cmd_i, str(cmd_i)),
                                 "episode/episode":       episode,
                                 "curriculum/stage":      current_stage,
                                 "curriculum/min_rate":   min_rate,
@@ -304,6 +308,7 @@ def training(args, env, simulation_app):
                                     base_env.cfg.episode_length_s,
                                 **per_cmd_rates,
                             }, step=steps)
+                            
 
                         
 
