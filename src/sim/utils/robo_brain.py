@@ -96,6 +96,32 @@ class Brain:
             else:
                 action, _ = self.actor(cam_emb, joint_emb)
         return action.squeeze(0).cpu().numpy()
+
+    def predict_next_action_batch(
+    self,
+    camera_states: np.ndarray,   # [N, 16, 224, 224]
+    joint_states:  np.ndarray,   # [N, 6]
+    deterministic: bool = False,
+    ) -> np.ndarray:
+        """
+        Batched version of predict_next_action — runs one forward pass for
+        all N envs instead of N separate calls. Returns [N, action_dim].
+        """
+        with torch.no_grad():
+            cam_t   = torch.FloatTensor(camera_states).to(self.device)   # [N, 16, 224, 224]
+            joint_t = torch.FloatTensor(joint_states).to(self.device)    # [N, 6]
+
+            cam_emb   = self.encoder(cam_t).detach()
+            joint_emb = self.joint_mlp(joint_t).detach()
+
+            if deterministic:
+                fused  = torch.cat([cam_emb, joint_emb], dim=1)
+                hidden = self.actor.net(fused)
+                action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
+            else:
+                action, _ = self.actor(cam_emb, joint_emb)
+
+        return action.cpu().numpy()   # [N, action_dim]
  
     def train(self):
         if len(self.buffer) < self.warmup:
@@ -104,11 +130,11 @@ class Brain:
         batch, indices, weights = self.buffer.sample(self.batch)
         weights = weights.to(self.device)
 
-        cam_states   = torch.FloatTensor(np.array([t.camera_state for t in batch])).to(self.device)
+        cam_states   = torch.FloatTensor(np.array([(t.camera_state.astype(np.float32) / 255.0)for t in batch])).to(self.device)
         joint_states = torch.FloatTensor(np.array([t.joint_state  for t in batch])).to(self.device)
         actions      = torch.FloatTensor(np.array([t.action       for t in batch])).to(self.device)
         rewards      = torch.FloatTensor(np.array([t.reward       for t in batch])).to(self.device)
-        cam_nexts    = torch.FloatTensor(np.array([t.camera_next  for t in batch])).to(self.device)
+        cam_nexts    = torch.FloatTensor(np.array([(t.camera_next.astype(np.float32) / 255.0)  for t in batch])).to(self.device)
         joint_nexts  = torch.FloatTensor(np.array([t.joint_next   for t in batch])).to(self.device)
         dones        = torch.FloatTensor(np.array([t.done         for t in batch])).to(self.device)
         n_steps      = torch.FloatTensor(np.array([t.n            for t in batch])).to(self.device)
