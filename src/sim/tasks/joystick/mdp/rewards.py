@@ -5,6 +5,7 @@ from __future__ import annotations
 from isaaclab.envs import ManagerBasedRLEnv
 import torch
 import numpy as np
+import cv2
 
 DEADZONE_DEG = 6.5 
 DISPLACEMENT_THRESHOLD_DEG = 10.0 
@@ -31,10 +32,66 @@ CMD_LEFT    = 4
 CMD_RIGHT   = 5
 CMD_HOME    = 1
 
+
+BLUE_LOWER  = np.array([100, 80, 50])
+BLUE_UPPER  = np.array([130, 255, 255])
+WHITE_LOWER = np.array([0, 0, 180])   # confirmed working against the corrected, lit frame
+WHITE_UPPER = np.array([180, 60, 255])
+
+MIN_BLOB_AREA = 20
+
+POSITIONS_HOME = np.array([
+    0,      # shoulder_pan
+    12,     # shoulder_lift
+    53.0,   # elbow_flex
+    -63.0,  # wrist_flex
+    90.0,   # wrist_roll
+    38.717498779296875,  # gripper (open)
+], dtype=np.float32)
+
+HOME_TOLERANCE_DEG = 3.0   
+
+
+def _largest_contour_centroid(mask, min_area=MIN_BLOB_AREA):
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    largest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(largest) < min_area:
+        return None
+    M = cv2.moments(largest)
+    if M["m00"] == 0:
+        return None
+    return (M["m10"] / M["m00"], M["m01"] / M["m00"])
+
+
+def _closest_point_to_target(mask, target_xy, min_area=MIN_BLOB_AREA):
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+    largest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(largest) < min_area:
+        return None
+    pts = largest.reshape(-1, 2).astype(np.float32)
+    dists = np.linalg.norm(pts - np.array(target_xy, dtype=np.float32), axis=1)
+    idx = np.argmin(dists)
+    return tuple(pts[idx])
+
+
+def _detect_joystick_and_arm(rgb_uint8: np.ndarray):
+    hsv = cv2.cvtColor(rgb_uint8, cv2.COLOR_RGB2HSV)
+    blue_mask  = cv2.inRange(hsv, BLUE_LOWER, BLUE_UPPER)
+    white_mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
+
+    joystick_xy = _largest_contour_centroid(blue_mask)
+    arm_xy = None
+    if joystick_xy is not None:
+        arm_xy = _closest_point_to_target(white_mask, joystick_xy)
+
+    return joystick_xy, arm_xy
+
 def joystick_zone(object_art, env_index):
-    """Classify the joystick's CURRENT physical position into a zone,
-    independent of what task it's being driven toward. This is what the
-    game should actually see, moment to moment — same as a real controller."""
+
     tilt_deg = np.rad2deg(object_art.data.joint_pos[env_index].cpu().numpy())  # [PivotY, PivotX]
     y_deg = tilt_deg[PIVOT_Y_IDX]   # left/right
     x_deg = tilt_deg[PIVOT_X_IDX]   # up/down
@@ -126,23 +183,8 @@ def axis_bonus(env, weight=1.0) -> torch.Tensor:
  
     return reward
 
-POSITIONS_HOME = np.array([
-    0,      # shoulder_pan
-    12,     # shoulder_lift
-    53.0,   # elbow_flex
-    -63.0,  # wrist_flex
-    90.0,   # wrist_roll
-    38.717498779296875,  # gripper (open)
-], dtype=np.float32)
-
-HOME_TOLERANCE_DEG = 3.0   
-
 def home_reward(env, weight=1.0) -> torch.Tensor:
-    """
-    Home success: all arm joints (including gripper) within tolerance of the
-    home configuration — beside the joystick, gripper open. Unrelated to
-    joystick angle entirely.
-    """
+
     commands = env.command_manager.get_command("joystick_cmd")
     robot = env.scene["robot"]
     reward = torch.zeros(env.num_envs, device=env.device)
@@ -164,4 +206,34 @@ def home_reward(env, weight=1.0) -> torch.Tensor:
 
     return reward
 
- 
+def vision_shaping_reward(
+    env,
+    weight_center:   float = 0.3,
+    weight_approach: float = 1.0,
+) -> torch.Tensor:
+
+    camera = env.scene["side"]
+    rgb_batch = camera.data.output["rgb"].cpu().numpy() 
+
+    reward = torch.zeros(env.num_envs, device=env.device)
+
+    for i in range(env.num_envs):
+        frame = rgb_batch[i]
+        h, w = frame.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+        max_dist = np.sqrt(cx**2 + cy**2)
+
+        joystick_xy, arm_xy = _detect_joystick_and_arm(frame)
+
+        if arm_xy is not None:
+            ax, ay = arm_xy
+            center_dist = np.sqrt((ax - cx) ** 2 + (ay - cy) ** 2)
+            reward[i] += weight_center * (1.0 - min(center_dist / max_dist, 1.0))
+
+            if joystick_xy is not None:
+                jx, jy = joystick_xy
+                approach_dist = np.sqrt((ax - jx) ** 2 + (ay - jy) ** 2)
+                reward[i] += weight_approach * (1.0 - min(approach_dist / max_dist, 1.0))
+       
+
+    return reward

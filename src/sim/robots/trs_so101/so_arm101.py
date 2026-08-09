@@ -37,7 +37,7 @@ SO_ARM101_CFG = ArticulationCfg(
             "shoulder_lift": -1.7,
             "elbow_flex": 1.6,
             "wrist_flex": -1.5,
-            "wrist_roll": 1.6,
+            "wrist_roll": 1.57,
             "gripper": 0.0,
         },
         # Set initial joint velocities to zero

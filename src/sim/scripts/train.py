@@ -58,6 +58,7 @@ CMD_NAMES = {
 }
 
 
+
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
@@ -70,6 +71,7 @@ def training(args, env, simulation_app):
     DECISION_STEPS = args.decision_steps
     base_env = env.unwrapped
     device   = str(base_env.device)
+
 
     # ── brain ─────────────────────────────────────────────────────────────────
     brain = Brain(
@@ -135,6 +137,7 @@ def training(args, env, simulation_app):
     obs, _ = env.reset()
 
     update_frame_stack(base_env, frame_stacks, reset_ids=list(range(N)))
+    
 
     cam_states   = np.stack([fs._get_state() for fs in frame_stacks])
     joint_states = base_env.scene["robot"].data.joint_pos.cpu().numpy()
@@ -174,6 +177,7 @@ def training(args, env, simulation_app):
 
                 update_frame_stack(base_env, frame_stacks,
                                     reset_ids=reset_ids if reset_ids else None)
+
 
                 cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
                 joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()

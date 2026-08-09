@@ -191,35 +191,35 @@ def randomise_controller_pose(
     rot_range:  float = 0.0,
 ):
     """
-    Resets the arcade stick to its default pose with a random offset.
+    Resets the arcade stick to its default pose (relative to each env's origin)
+    with a random offset.
     Range parameters are updated by the curriculum manager.
- 
+
     Default pose from InitialStateCfg:
         pos = [0.3, -0.052, 0.0]
         rot = [0.7071068, 0.0, 0.0, -0.7071068]  (w, x, y, z)
     """
 
- 
     object_art = env.scene["object"]
     device     = env.device
     N          = len(env_ids)
- 
-    # default pose
+
+    # default pose — local offset relative to each env's own origin
     default_pos = torch.tensor(
         STICK_DEFAULT_POS, dtype=torch.float32, device=device
     ).unsqueeze(0).repeat(N, 1)
- 
+
     default_rot = torch.tensor(
         STICK_DEFAULT_ROT, dtype=torch.float32, device=device
     ).unsqueeze(0).repeat(N, 1)
- 
+
     if pos_range > 0.0:
         # uniform offset in XY plane only — Z kept fixed
         offset_xy = (torch.rand(N, 2, device=device) * 2 - 1) * pos_range
         offset    = torch.zeros(N, 3, device=device)
         offset[:, :2] = offset_xy
         default_pos   = default_pos + offset
- 
+
     if rot_range > 0.0:
         # yaw-only rotation offset around vertical axis
         yaw_offset = (torch.rand(N, device=device) * 2 - 1) * rot_range
@@ -230,9 +230,13 @@ def randomise_controller_pose(
              torch.zeros_like(cos_h), sin_h], dim=1
         )
         default_rot = quat_mul(default_rot, yaw_quat)
- 
+
+    # add each env's own world-space origin — this was the missing piece
+    env_origins = env.scene.env_origins[env_ids]   # [N, 3]
+    world_pos   = default_pos + env_origins
+
     object_art.write_root_pose_to_sim(
-        torch.cat([default_pos, default_rot], dim=1),
+        torch.cat([world_pos, default_rot], dim=1),
         env_ids=env_ids,
     )
 
@@ -275,8 +279,8 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     side = CameraCfg(
         prim_path = "{ENV_REGEX_NS}/side",
         update_period=0.1,
-        height=1280,
-        width=720,
+        height=720,
+        width=1280,
         data_types=["rgb", "distance_to_image_plane"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=6.3562, focus_distance=28.0, horizontal_aperture=12.7, clipping_range=(0.1, 1.0e5)
@@ -353,7 +357,12 @@ class RewardsCfg:
             weight=1.0, 
             params={"weight": 1.0},
         )
-
+    vision_shaping = RewTerm(
+            func=mdp.vision_shaping_reward, 
+            weight=0.5, 
+            params={"weight_center": 0.2, "weight_approach": 0.5}
+        )
+    
 # @configclass
 # class CurriculumCfg:
 #         joystick_curriculum = CurrTerm(
