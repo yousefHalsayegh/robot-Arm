@@ -61,7 +61,8 @@ CMD_UP      = 2
 CMD_DOWN    = 3
 CMD_LEFT    = 4
 CMD_RIGHT   = 5
-ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT]
+CMD_HOME    = 1
+ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME]
 ##
 # Scene definition
 ##
@@ -336,7 +337,7 @@ class RewardsCfg:
         )
     step_penalty = RewTerm(
             func=mdp.step_penalty,
-            weight=1.0,
+            weight=0.1,
             params={
                 "current_budget":500,   # 5s * 100Hz / decimation
                 "weight": 0.1,
@@ -344,8 +345,13 @@ class RewardsCfg:
         )
     axis_bonus = RewTerm(
             func=mdp.axis_bonus,
-            weight=0.1,
+            weight=0.5,
             params={"weight": 0.5},
+        )
+    home_success = RewTerm(
+            func=mdp.home_reward,
+            weight=1.0, 
+            params={"weight": 1.0},
         )
 
 # @configclass
@@ -387,7 +393,7 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 1
-        self.episode_length_s = 5
+        self.episode_length_s = 10
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 0.01  # 100Hz

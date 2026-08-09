@@ -63,20 +63,9 @@ class Brain:
         self.alpha_optimiser = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.buffer       = ReplayBuffer(c)
-        self.norm_success = RunningNormaliser()
-        self.norm_penalty = RunningNormaliser()
-        self.norm_bonus   = RunningNormaliser()
+        self.reward = RunningNormaliser()
 
-    def normalise_reward(self, success, penalty, bonus):
-        self.norm_success.update(success)
-        self.norm_penalty.update(penalty)
-        self.norm_bonus.update(bonus)
 
-        return (
-            self.norm_success.normalise(success)
-            + self.norm_penalty.normalise(penalty)
-            + self.norm_bonus.normalise(bonus)
-        )
 
     def predict_next_action(
         self,
@@ -124,17 +113,18 @@ class Brain:
         return action.cpu().numpy()   # [N, action_dim]
  
     def train(self):
+
         if len(self.buffer) < self.warmup:
-            return 0, 0
+            return 0, 0, {}
 
         batch, indices, weights = self.buffer.sample(self.batch)
         weights = weights.to(self.device)
 
-        cam_states   = torch.FloatTensor(np.array([(t.camera_state.astype(np.float32) / 255.0)for t in batch])).to(self.device)
+        cam_states   = torch.FloatTensor(np.array([(t.camera_state.astype(np.float32) / 255.0) for t in batch])).to(self.device)
         joint_states = torch.FloatTensor(np.array([t.joint_state  for t in batch])).to(self.device)
         actions      = torch.FloatTensor(np.array([t.action       for t in batch])).to(self.device)
         rewards      = torch.FloatTensor(np.array([t.reward       for t in batch])).to(self.device)
-        cam_nexts    = torch.FloatTensor(np.array([(t.camera_next.astype(np.float32) / 255.0)  for t in batch])).to(self.device)
+        cam_nexts    = torch.FloatTensor(np.array([(t.camera_next.astype(np.float32) / 255.0) for t in batch])).to(self.device)
         joint_nexts  = torch.FloatTensor(np.array([t.joint_next   for t in batch])).to(self.device)
         dones        = torch.FloatTensor(np.array([t.done         for t in batch])).to(self.device)
         n_steps      = torch.FloatTensor(np.array([t.n            for t in batch])).to(self.device)
@@ -162,7 +152,7 @@ class Brain:
 
         self.critic_optimiser.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
+        critic_grad_norm = torch.nn.utils.clip_grad_norm_(
             list(self.encoder.parameters())
             + list(self.joint_mlp.parameters())
             + list(self.critic.parameters()), 10
@@ -180,7 +170,7 @@ class Brain:
 
         self.actor_optimiser.zero_grad()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
         self.actor_optimiser.step()
 
         # entropy temperature update
@@ -194,7 +184,25 @@ class Brain:
         self._soft_update(self.joint_mlp, self.target_joint_mlp)
         self._soft_update(self.critic,    self.critic_target)
 
-        return critic_loss.item(), actor_loss.item()
+        n = len(self.buffer)
+        diagnostics = {
+            "train/q1_mean":         q1.mean().item(),
+            "train/q2_mean":         q2.mean().item(),
+            "train/q1_q2_gap":       (q1 - q2).abs().mean().item(),
+            "train/target_q_mean":   target_q.mean().item(),
+            "train/td_error_mean":   float(np.abs(td_errors).mean()),
+            "train/log_prob_mean":   log_prob.mean().item(),
+            "train/entropy":         -log_prob.mean().item(),
+            "train/alpha_loss":      alpha_loss.item(),
+            "train/action_mean":     new_action.mean().item(),
+            "train/action_std":      new_action.std().item(),
+            "train/critic_grad_norm": critic_grad_norm.item(),
+            "train/actor_grad_norm":  actor_grad_norm.item(),
+            "train/priority_mean":   float(self.buffer.priorities[:n].mean()),
+            "train/priority_max":    float(self.buffer.priorities[:n].max()),
+        }
+
+        return critic_loss.item(), actor_loss.item(), diagnostics
  
     def _soft_update(self, source: nn.Module, target: nn.Module):
         for sp, tp in zip(source.parameters(), target.parameters()):
@@ -221,9 +229,7 @@ class Brain:
             "log_alpha":        self.log_alpha.detach().cpu(),
             "episode":      episode,
             "steps":        steps,
-            "norm_success": self.norm_success.state_dict(),
-            "norm_penalty": self.norm_penalty.state_dict(),
-            "norm_bonus":   self.norm_bonus.state_dict(),
+            "norm_success": self.reward.state_dict(),
         }, os.path.join(path, f"manipulation_brain_{episode}.pth"))
  
     def load_checkpoint(self, path: str) -> tuple[int, int]:
@@ -231,9 +237,7 @@ class Brain:
         self.policy.load_state_dict(ckpt["policy"])
         self.target.load_state_dict(ckpt["target"])
         self.optimiser.load_state_dict(ckpt["optimiser"])
-        self.norm_success.load_state_dict(ckpt.get("norm_success", {}))
-        self.norm_penalty.load_state_dict(ckpt.get("norm_penalty", {}))
-        self.norm_bonus.load_state_dict(ckpt.get("norm_bonus",   {}))
+        self.reward.load_state_dict(ckpt.get("norm_success", {}))
         return ckpt.get("steps", 0), ckpt.get("episode", 0)
     @property
     def alpha(self) -> torch.Tensor:
@@ -259,9 +263,10 @@ class Actor(nn.Module):
         std     = log_std.exp()
         dist    = torch.distributions.Normal(mean, std)
         x_t     = dist.rsample()
-        action  = torch.tanh(x_t) * ACTION_SCALE
-        log_prob = dist.log_prob(x_t) \
-                   - torch.log(ACTION_SCALE * (1 - torch.tanh(x_t).pow(2)) + 1e-6)
+        tanh_x  = torch.tanh(x_t)
+        action  = tanh_x * ACTION_SCALE
+
+        log_prob = dist.log_prob(x_t) - torch.log(1 - tanh_x.pow(2) + 1e-6)  
         log_prob = log_prob.sum(dim=-1)
         return action, log_prob
 
@@ -335,7 +340,7 @@ class RunningNormaliser:
     def __init__(self, epsilon = 1e-8):
         
         self.mean = 0
-        self.var = 1.0
+        self.var = 0.0
         self.count = 0
 
         self.epsilon = epsilon
@@ -350,7 +355,9 @@ class RunningNormaliser:
 
     def normalise(self, value):
         std = np.sqrt(self.var/ max(self.count,1)) + self.epsilon
-        return value/std
+        norm = value/std
+        print(norm)
+        return np.clip(norm, -1, 1)
     
 
     def state_dict(self):

@@ -11,6 +11,7 @@ parser.add_argument("-ep",  "--episodes",      type=int,   default=10000)
 parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
 parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
 parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
+parser.add_argument("-c", "--capacity",    type=int,   default=1000000)
 parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
@@ -42,7 +43,7 @@ from sim.tasks.joystick.mdp.observations import (
     Frames, update_frame_stack
 )
 from sim.tasks.joystick.play_env_cfg import (
-    ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT,
+    ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME,
     UPPER_THRESHOLD, LOWER_THRESHOLD, WINDOW_SIZE, STAGE_EPISODE_LENGTHS,
 )
 from sim.tasks.joystick.mdp.rewards import (
@@ -53,6 +54,7 @@ from sim.tasks.joystick.mdp.rewards import (
 CMD_NAMES = {
     CMD_NEUTRAL: "neutral", CMD_UP: "up",
     CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
+    CMD_HOME: "home"
 }
 
 
@@ -72,7 +74,8 @@ def training(args, env, simulation_app):
     # ── brain ─────────────────────────────────────────────────────────────────
     brain = Brain(
         ce   = args.cam_embedding,
-        je = args.joint_embedding
+        je = args.joint_embedding,
+        c=args.capacity
     )
 
     steps, start_ep = 0, 0
@@ -103,6 +106,8 @@ def training(args, env, simulation_app):
         with open(prefill_path, "rb") as f:
             brain.buffer = pickle.load(f)
         print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
+    else:
+        print("there was no buffer, starting from scratch")
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
@@ -141,8 +146,10 @@ def training(args, env, simulation_app):
     try:
         with tqdm(total=args.episodes, initial=start_ep,
                   desc="LowLevel Training", unit="ep") as pbar:
+
             while episode < args.episodes:
-                start_t = time.time()
+                start = time.time()
+
                 # ── read current commands from Isaac Lab command manager ───────
                 commands = base_env.command_manager.get_command(
                     "joystick_cmd"
@@ -164,17 +171,12 @@ def training(args, env, simulation_app):
 
                 # ── update frame stacks ───────────────────────────────────────
                 reset_ids = torch.where(dones)[0].cpu().tolist()
-                camera_time = time.time()
+
                 update_frame_stack(base_env, frame_stacks,
                                     reset_ids=reset_ids if reset_ids else None)
-                camera_time = abs(camera_time - time.time())
+
                 cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
                 joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()
-
-                # ── per-env processing ────────────────────────────────────────
-                sparse_success = info.get("reward/sparse_success", torch.zeros(N)).cpu().numpy()
-                step_penalty = info.get("reward/step_penalty", torch.zeros(N)).cpu().numpy()
-                axis_bonus = info.get("reward/axis_bonus", torch.zeros(N)).cpu().numpy()
                 for i in range(N):
                     episode_steps[i] += 1
                     decision_steps[i] += 1
@@ -182,21 +184,16 @@ def training(args, env, simulation_app):
                     tilt_deg = np.rad2deg(base_env.scene["object"].data.joint_pos[i].cpu().numpy())
                     x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
                     max_displacement[i] = max(max_displacement[i], abs(x_deg), abs(y_deg))
-
                     # read reward components from Isaac Lab reward manager
                     # rewards tensor is the combined reward from RewardsCfg
                     # individual components available via info if needed
-                    combined_reward = brain.normalise_reward(
-                        sparse_success[i], 
-                        step_penalty[i], 
-                        axis_bonus[i]
-                    )
-                    episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * combined_reward
+                    
+                    normalised_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
 
+                    episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * normalised_reward
 
                     timeout_i = episode_steps[i] >= int(base_env.cfg.episode_length_s * 100)
-                    decision_boundary = (decision_steps[i] >= DECISION_STEPS) or done_i or timeout_i
-
+                    decision_boundary = (decision_steps[i] >= DECISION_STEPS)
                     if decision_boundary:
 
                         brain.buffer.push(
@@ -211,7 +208,7 @@ def training(args, env, simulation_app):
                                 )
 
                         steps += 1 
-                        critic_loss, actor_loss = brain.train()
+                        critic_loss, actor_loss, train_diagnostics = brain.train()
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
                         action_decision[i] = brain.predict_next_action(
@@ -240,7 +237,7 @@ def training(args, env, simulation_app):
                         steps += 1
 
                         # train
-                        critic_loss, actor_loss = brain.train()
+                        critic_loss, actor_loss, train_diagnostics = brain.train()
                         
 
                         # movement time
@@ -286,29 +283,21 @@ def training(args, env, simulation_app):
                                 "train/critic_loss": critic_loss,
                                 "train/actor_loss":  actor_loss,
                                 "train/alpha":       brain.alpha.item(),
-                                "train/buffer_size":     len(brain.buffer),
-                                "train/norm_var_success": brain.norm_success.var, 
-                                "train/norm_var_penalty": brain.norm_penalty.var, 
-                                "train/norm_var_bonus":   brain.norm_bonus.var,
-                                "train/norm_count_success": brain.norm_success.count, 
-                                "train/norm_count_penalty": brain.norm_penalty.count, 
-                                "train/norm_count_bonus": brain.norm_bonus.count,
-                                "train/steps":           steps,
+                                "train/buffer_size": len(brain.buffer),
+                                "train/steps":       steps,
                                 "episode/episode_return": episode_return[i],
-                                "episode/combined_reward": combined_reward,
                                 "episode/success":       float(registered),
                                 "episode/steps_taken":   episode_steps[i],
-                                "episode/episode_time_s":  ep_time,
-                                "episode/command":       CMD_NAMES.get(
-                                                                cmd_i, str(cmd_i)),
+                                "episode/episode_time_s": ep_time,
+                                "episode/command":       CMD_NAMES.get(cmd_i, str(cmd_i)),
                                 "episode/episode":       episode,
                                 "curriculum/stage":      current_stage,
                                 "curriculum/min_rate":   min_rate,
-                                "curriculum/ep_length":
-                                    base_env.cfg.episode_length_s,
+                                "curriculum/ep_length":  base_env.cfg.episode_length_s,
                                 **per_cmd_rates,
+                                **train_diagnostics,  
                             }, step=steps)
-                            
+                                
 
                         
 
@@ -341,11 +330,16 @@ def training(args, env, simulation_app):
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
                         action_decision[i] = brain.predict_next_action(cam_next[i].astype(np.float32)/255.0, joint_next[i], steps)
+                        
 
                 # update states for next step
                 cam_states   = cam_next
                 joint_states = joint_next
-                print(f"time taken {abs(start_t - time.time)} camera took {camera_time}")
+                if args.wandb:
+                    wandb.log({
+                            "train/speed": abs(time.time() - start),
+                    }, step=steps)
+
 
 
     except KeyboardInterrupt:
