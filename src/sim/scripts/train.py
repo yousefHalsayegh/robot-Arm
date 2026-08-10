@@ -17,6 +17,10 @@ parser.add_argument("-w",   "--wandb",         default=True,
 parser.add_argument("--cam_embedding",   type=int, default=256)
 parser.add_argument("--joint_embedding", type=int, default=64)
 parser.add_argument("--decision_steps", type=int, default=30)
+parser.add_argument("--lerobot_repo_id",   type=str, default=None)
+parser.add_argument("--synthetic_per_cmd", type=int, default=500)
+parser.add_argument("--action_scale_deg",  type=float, default=5.0)
+parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -49,6 +53,11 @@ from sim.tasks.joystick.play_env_cfg import (
 from sim.tasks.joystick.mdp.rewards import (
     joystick_registered, ACT_TO_ZONE, DISPLACEMENT_THRESHOLD_DEG,
     PIVOT_Y_IDX, PIVOT_X_IDX
+)
+
+from sim.scripts.fill_buffer import (   
+    convert_lerobot_to_buffer,
+    generate_synthetic_transitions,
 )
 
 CMD_NAMES = {
@@ -103,13 +112,40 @@ def training(args, env, simulation_app):
     # ── frame stacks — one per env ────────────────────────────────────────────
     frame_stacks = [Frames(n=4) for _ in range(N)]
 
-    prefill_path = "buffer_prefill.pkl"
-    if os.path.exists(prefill_path):
-        with open(prefill_path, "rb") as f:
+    if os.path.exists(args.prefill_path):
+        with open(args.prefill_path, "rb") as f:
             brain.buffer = pickle.load(f)
         print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
     else:
-        print("there was no buffer, starting from scratch")
+        print(f"no prefill buffer found at {args.prefill_path} — generating one now")
+
+        prefill_frame_stacks = [Frames(n=4)]   # single-env, matches fill_buffer's own assumption
+        update_frame_stack(base_env, prefill_frame_stacks, reset_ids=[0])
+
+        if args.lerobot_repo_id:
+            convert_lerobot_to_buffer(
+                base_env, prefill_frame_stacks, brain.buffer,
+                repo_id=args.lerobot_repo_id,
+                device=device,
+                simulation_app=simulation_app,
+                decision_steps=DECISION_STEPS,        # reuse train.py's own constant, not a re-declared one
+                action_scale=np.deg2rad(args.action_scale_deg),
+                gamma=brain.gamma,
+            )
+
+        generate_synthetic_transitions(
+            base_env, prefill_frame_stacks, brain.buffer,
+            n_per_command=args.synthetic_per_cmd,
+            decision_steps=DECISION_STEPS,
+            action_scale=np.deg2rad(args.action_scale_deg),
+            gamma=brain.gamma,
+            device=device,
+            simulation_app=simulation_app,
+        )
+
+        print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
+        with open(args.prefill_path, "wb") as f:
+            pickle.dump(brain.buffer, f)
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate

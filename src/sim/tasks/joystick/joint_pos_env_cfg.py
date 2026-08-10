@@ -55,15 +55,16 @@ class SoArm101LiftCubeEnvCfg(PlayEnvCfg):
         self.scene.object = ArticulationCfg(
             prim_path="{ENV_REGEX_NS}/object",
             init_state=ArticulationCfg.InitialStateCfg(
-                pos=[0.3, -0.052, 0.0],
+                pos=[0.305, -0.058, 0.0],
                 rot=[0.7071068, 0.0, 0.0, -0.7071068],
                 joint_pos={".*": 0.0},  # joystick starts centered
                     ),
             actuators={
                 "joystick": ImplicitActuatorCfg(
                     joint_names_expr=["PivotX", "PivotY"],  
-                    stiffness=0.08,  
-                    damping=0.05,     
+                    stiffness=3.5,  
+                    damping=0.05,    
+                    friction = 0.05, 
                 ),
             },
             spawn=UsdFileCfg(

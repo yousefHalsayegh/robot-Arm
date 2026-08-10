@@ -18,36 +18,36 @@ POSITIONS = {
         0,  # shoulder_pan
         12,  # shoulder_lift
         53.0,  # elbow_flex
-        -63.0,  # wrist_flex
+        -64.0,  # wrist_flex
         90.0,  # wrist_roll
         38.717498779296875,  # gripper
     ], dtype=np.float32),
 
     "down": np.array([
         -0.4,  # shoulder_pan
-        10,  # shoulder_lift
-        57.0,  # elbow_flex
-        -69.0,  # wrist_flex
+        12,  # shoulder_lift
+        59.0,  # elbow_flex
+        -79.0,  # wrist_flex
         90.0,  # wrist_roll
-        8.5,  # gripper
+        7.5,  # gripper
     ], dtype=np.float32),
 
     "up": np.array([
         -0.4,  # shoulder_pan
         12,  # shoulder_lift
-        45.6,  # elbow_flex
-        -60.999992,  # wrist_flex
+        40.6,  # elbow_flex
+        -48.999992,  # wrist_flex
         90.0,  # wrist_roll
-        8.5,  # gripper
+        7.5,  # gripper
     ], dtype=np.float32),
 
     "neutral": np.array([
         -0.4,  # shoulder_pan
         12,  # shoulder_lift
         52.0,  # elbow_flex
-        -63.0,  # wrist_flex
+        -64.0,  # wrist_flex
         90.0,  # wrist_roll
-        8.5,  # gripper
+        7.5,  # gripper
     ], dtype=np.float32),
     
 
@@ -340,7 +340,7 @@ def calibrate_zone_position(articulation, object_art, env_index,
 
 def measure_joystick_response(articulation, object_art, robot, sim_step_fn,
                                target_name, pivot_x_idx, deadzone_deg, physics_dt,
-                               max_steps=300):
+                               max_steps=150):
     target_t = torch.tensor(POSITIONS[target_name], dtype=torch.float32, device="cuda").unsqueeze(0)
     for step in range(max_steps):
         articulation.set_joint_position_target(target_t)

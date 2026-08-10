@@ -44,7 +44,7 @@ from isaaclab.utils.math import quat_mul
 #from isaac_so_arm101.utils.domain_randomization import domain_randomization, randomize_object_uniform
 
 # arcade stick default pose from joint_pos_env_cfg.py InitialStateCfg
-STICK_DEFAULT_POS = [0.3, -0.052, 0.0]
+STICK_DEFAULT_POS = [0.305, -0.058, 0.0]
 STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
  
 # curriculum episode lengths — step down 0.5s per stage
