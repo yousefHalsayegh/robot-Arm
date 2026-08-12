@@ -1,17 +1,8 @@
-# Copyright (c) 2024-2025, Muammer Bay (LycheeAI), Louis Le Lay
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
 import torch 
+import torch.nn.functional as F
 import numpy as np
 # from . import mdp
 import sim.tasks.joystick.mdp as mdp
@@ -22,7 +13,7 @@ from isaaclab.assets import (
     RigidObjectCfg,
 )
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import CurriculumTermCfg as CurrTerm
+import isaaclab.envs.manager_based_env as _mbe
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -44,10 +35,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import quat_mul
 
 from sim.enhance.managers.recorder_manager import StreamingRecorderManager
-
-##check how to implement this 
-#from isaac_so_arm101.utils.domain_randomization import domain_randomization, randomize_object_uniform
-
+_mbe.RecorderManager = StreamingRecorderManager
 # arcade stick default pose from joint_pos_env_cfg.py InitialStateCfg
 STICK_DEFAULT_POS = [0.305, -0.058, 0.0]
 STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
@@ -74,11 +62,18 @@ ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME]
 
 class SideCameraRecorder(RecorderTerm):
 
-
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self._step_counter = 0
+        self._record_every_n = 10 
+        
     def record_post_step(self):
         camera = self._env.scene["side"]
         rgb = camera.data.output["rgb"].clone()
-        return "side_camera_rgb", rgb
+        rgb_small = F.interpolate(
+            rgb.permute(0, 3, 1, 2).float(), size=(180, 320), mode="bilinear"
+        ).permute(0, 2, 3, 1).to(torch.uint8)
+        return "side_camera_rgb", rgb_small
 
 class JoystickActionTerm(ActionTerm):
 
@@ -378,13 +373,10 @@ class RewardsCfg:
         )
     
 
-
 @configclass
-class RecordCfg:
-    """Recorder terms for the MDP — uses the project's StreamingRecorderManager
-    to avoid EpisodeData's known per-step accumulation cost on image data."""
-
-    class_type: type = StreamingRecorderManager
+class RecordCfg(RecorderManagerBaseCfg):
+    """Recorder terms for the MDP — StreamingRecorderManager is substituted
+    via a module-level monkey-patch in train.py, not via this cfg."""
 
     dataset_export_dir_path: str = "logs/recordings"
     dataset_filename: str = "dataset"
@@ -420,7 +412,7 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     terminations: TerminationsCfg = TerminationsCfg()
     rewards : RewardsCfg = RewardsCfg()
-    record: RecordCfg = RecordCfg()
+    recorders: RecordCfg = RecordCfg()
     events: EventCfg = EventCfg()
 
 

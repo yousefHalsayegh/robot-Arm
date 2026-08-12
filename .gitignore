@@ -53,3 +53,5 @@ logs/
 /.pretrained_checkpoints/
 **/Checkpoints/
 *.pkl
+*/runs/
+*/logs/

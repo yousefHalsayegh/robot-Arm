@@ -64,6 +64,7 @@ CMD_NAMES = {
 }
 
 
+JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -163,7 +164,6 @@ def training(args, env, simulation_app):
     action_decision = None
     episode_return = np.zeros(N, dtype=np.float32)
     decision_steps = np.zeros(N, dtype=int)
-    max_displacement = np.zeros(N, dtype=np.float32)
     critic_loss, actor_loss = 0.0, 0.0
 
     # ── initial reset ─────────────────────────────────────────────────────────
@@ -179,6 +179,8 @@ def training(args, env, simulation_app):
     joint_decision = joint_states.copy()
 
     action_decision = brain.predict_next_action_batch(cam_states,  joint_states, steps)
+    prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
+
     try:
         with tqdm(total=args.episodes, initial=start_ep,
                   desc="LowLevel Training", unit="ep") as pbar:
@@ -203,6 +205,8 @@ def training(args, env, simulation_app):
                 obs, rewards, terminated, truncated, info = env.step(
                     torch.tensor(target_joints, dtype=torch.float32, device=device)
                 )
+
+                
                 dones = terminated | truncated
 
                 # ── update frame stacks ───────────────────────────────────────
@@ -219,9 +223,10 @@ def training(args, env, simulation_app):
                     decision_steps[i] += 1
                     done_i = bool(dones[i].item())
 
-                    # read reward components from Isaac Lab reward manager
-                    # rewards tensor is the combined reward from RewardsCfg
-                    # individual components available via info if needed
+
+                    current_joint_deg = np.rad2deg(joint_next[i])
+                    joint_delta_deg = current_joint_deg - prev_joint_pos_deg[i]
+                    prev_joint_pos_deg[i] = current_joint_deg
                     
                     normalised_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
 
@@ -312,6 +317,10 @@ def training(args, env, simulation_app):
                                     max(len(command_success_buf[c]), 1)
                                 for c in ALL_COMMANDS
                             }
+                            joint_log = {
+                                    f"joint_movement/env{i}/{name}": joint_delta_deg[j]
+                                    for j, name in enumerate(JOINT_NAMES)
+                                }
                             wandb.log({
                                 "train/critic_loss": critic_loss,
                                 "train/actor_loss":  actor_loss,
@@ -329,6 +338,7 @@ def training(args, env, simulation_app):
                                 "curriculum/ep_length":  base_env.cfg.episode_length_s,
                                 **per_cmd_rates,
                                 **train_diagnostics,  
+                                **joint_log,
                             }, step=steps)
                                 
 
@@ -337,13 +347,9 @@ def training(args, env, simulation_app):
                         if episode % args.mid_save == 0 and episode != 0:
                             brain.save_checkpoint(
                                 episode, steps,
-                                f"LowLevel-{args.job_name}/Checkpoints"
+                                f"runs/LowLevel-{args.job_name}/Checkpoints"
                             )
-                        if episode % args.full_save == 0 and episode != 0:
-                            brain.save_checkpoint(
-                                episode, steps,
-                                f"LowLevel-{args.job_name}/Full"
-                            )
+                        
                         pbar.set_postfix({
                             "steps": steps, 
                             "ep":      episode,
@@ -381,6 +387,10 @@ def training(args, env, simulation_app):
             wandb.finish()
         env.close()
         simulation_app.close()
+        brain.save_checkpoint(
+            episode, steps,
+            f"runs/LowLevel-{args.job_name}/Full"
+        )
 
     except Exception as e:
         import traceback
@@ -402,6 +412,11 @@ def training(args, env, simulation_app):
             )
             wandb.finish(exit_code=1)
         raise
+
+    brain.save_checkpoint(
+        episode, steps,
+        f"runs/LowLevel-{args.job_name}/Full"
+    )
 
 
 def _update_curriculum_stage(base_env, stage: int):
