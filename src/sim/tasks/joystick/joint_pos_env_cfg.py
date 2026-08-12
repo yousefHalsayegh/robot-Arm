@@ -64,7 +64,7 @@ class SoArm101LiftCubeEnvCfg(PlayEnvCfg):
                     joint_names_expr=["PivotX", "PivotY"],  
                     stiffness=3.5,  
                     damping=0.05,    
-                    friction = 0.05, 
+                    friction = 0.1, 
                 ),
             },
             spawn=UsdFileCfg(

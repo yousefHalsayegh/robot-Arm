@@ -8,7 +8,7 @@ parser.add_argument("--task",           type=str, default=None)
 parser.add_argument("--disable_fabric", action="store_true", default=False)
 parser.add_argument(
     "--stiffness_values", type=float, nargs="+",
-    default=[2, 2.5, 3, 3.5, 4, 4.5, 5],
+    default=[3, 3.5],
     help="candidate stiffness values to test, in the actuator's native units",
 )
 parser.add_argument(

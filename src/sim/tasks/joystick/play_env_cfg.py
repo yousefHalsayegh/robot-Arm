@@ -29,10 +29,12 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.managers import RecorderTermCfg as RecTerm
 from isaaclab.managers import ActionTermCfg as ActTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import CommandTermCfg as ComTerm
-from isaaclab.managers import CommandTerm, ActionTerm
+from isaaclab.managers import CommandTerm, ActionTerm, RecorderTerm
+from isaaclab.managers.recorder_manager import RecorderManagerBaseCfg, DatasetExportMode
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sensors import CameraCfg
@@ -40,6 +42,9 @@ from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdF
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import quat_mul
+
+from sim.enhance.managers.recorder_manager import StreamingRecorderManager
+
 ##check how to implement this 
 #from isaac_so_arm101.utils.domain_randomization import domain_randomization, randomize_object_uniform
 
@@ -66,6 +71,14 @@ ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME]
 ##
 # Scene definition
 ##
+
+class SideCameraRecorder(RecorderTerm):
+
+
+    def record_post_step(self):
+        camera = self._env.scene["side"]
+        rgb = camera.data.output["rgb"].clone()
+        return "side_camera_rgb", rgb
 
 class JoystickActionTerm(ActionTerm):
 
@@ -328,6 +341,7 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    success  = DoneTerm(func=mdp.success_termination)
 
     #function
 
@@ -363,12 +377,20 @@ class RewardsCfg:
             params={"weight_center": 0.2, "weight_approach": 0.5}
         )
     
-# @configclass
-# class CurriculumCfg:
-#         joystick_curriculum = CurrTerm(
-#             func=min_command_success_rate,
-#             params={"command_success_buf": {}},  
-#         )
+
+
+@configclass
+class RecordCfg:
+    """Recorder terms for the MDP — uses the project's StreamingRecorderManager
+    to avoid EpisodeData's known per-step accumulation cost on image data."""
+
+    class_type: type = StreamingRecorderManager
+
+    dataset_export_dir_path: str = "logs/recordings"
+    dataset_filename: str = "dataset"
+    dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_ALL
+
+    side_camera = RecTerm(class_type=SideCameraRecorder)
 
 @configclass
 class EventCfg:
@@ -379,6 +401,10 @@ class EventCfg:
                 "pos_range": 0.0,   # Stage 0: fixed position
                 "rot_range": 0.0,
             },
+        )
+        reset_displacement_tracker = EventTerm(     
+            func=mdp.reset_displacement_tracker,
+            mode="reset",
         )
 
 @configclass
@@ -394,7 +420,7 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     terminations: TerminationsCfg = TerminationsCfg()
     rewards : RewardsCfg = RewardsCfg()
-    # curriculum: CurriculumCfg = CurriculumCfg()
+    record: RecordCfg = RecordCfg()
     events: EventCfg = EventCfg()
 
 

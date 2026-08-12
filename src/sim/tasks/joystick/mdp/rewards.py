@@ -32,6 +32,11 @@ CMD_LEFT    = 4
 CMD_RIGHT   = 5
 CMD_HOME    = 1
 
+CMD_TO_TASK  = {
+    CMD_NEUTRAL: "neutral", CMD_UP: "up",
+    CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
+    CMD_HOME : "home"
+}
 
 BLUE_LOWER  = np.array([100, 80, 50])
 BLUE_UPPER  = np.array([130, 255, 255])
@@ -120,9 +125,9 @@ def joystick_registered(object_art, env_index, task):
     elif task == "down":
         return x_deg > DEADZONE_DEG
     elif task == "left":
-        return y_deg < -DEADZONE_DEG
-    elif task == "right":
         return y_deg > DEADZONE_DEG
+    elif task == "right":
+        return y_deg < -DEADZONE_DEG
     return False
 
 #Reward Functions

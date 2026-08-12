@@ -16,9 +16,9 @@ parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
 parser.add_argument("--joint_embedding", type=int, default=64)
-parser.add_argument("--decision_steps", type=int, default=30)
+parser.add_argument("-ds", "--decision_steps", type=int, default=30)
 parser.add_argument("--lerobot_repo_id",   type=str, default=None)
-parser.add_argument("--synthetic_per_cmd", type=int, default=500)
+parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=500)
 parser.add_argument("--action_scale_deg",  type=float, default=5.0)
 parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
 
@@ -50,10 +50,7 @@ from sim.tasks.joystick.play_env_cfg import (
     ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME,
     UPPER_THRESHOLD, LOWER_THRESHOLD, WINDOW_SIZE, STAGE_EPISODE_LENGTHS,
 )
-from sim.tasks.joystick.mdp.rewards import (
-    joystick_registered, ACT_TO_ZONE, DISPLACEMENT_THRESHOLD_DEG,
-    PIVOT_Y_IDX, PIVOT_X_IDX
-)
+
 
 from sim.scripts.fill_buffer import (   
     convert_lerobot_to_buffer,
@@ -221,9 +218,7 @@ def training(args, env, simulation_app):
                     episode_steps[i] += 1
                     decision_steps[i] += 1
                     done_i = bool(dones[i].item())
-                    tilt_deg = np.rad2deg(base_env.scene["object"].data.joint_pos[i].cpu().numpy())
-                    x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
-                    max_displacement[i] = max(max_displacement[i], abs(x_deg), abs(y_deg))
+
                     # read reward components from Isaac Lab reward manager
                     # rewards tensor is the combined reward from RewardsCfg
                     # individual components available via info if needed
@@ -259,10 +254,8 @@ def training(args, env, simulation_app):
                         
                     if done_i or timeout_i:
                         # check if success or timeout
-                        task       = ACT_TO_ZONE[int(commands[i])]
-                        registered = joystick_registered(base_env.scene["object"], i, task)
-                        if task == "neutral":
-                            registered = registered and (max_displacement[i] > DISPLACEMENT_THRESHOLD_DEG)
+    
+                        registered = bool(terminated[i].item())
                         # push to buffer
                         brain.buffer.push(
                             (cam_decision[i] * 255).round().astype(np.uint8),

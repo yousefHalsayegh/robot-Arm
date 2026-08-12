@@ -26,19 +26,19 @@ POSITIONS = {
     "down": np.array([
         -0.4,  # shoulder_pan
         12,  # shoulder_lift
-        59.0,  # elbow_flex
-        -79.0,  # wrist_flex
+        70.0,  # elbow_flex
+        -110.0,  # wrist_flex
         90.0,  # wrist_roll
-        7.5,  # gripper
+        6.5,  # gripper
     ], dtype=np.float32),
 
     "up": np.array([
         -0.4,  # shoulder_pan
         12,  # shoulder_lift
         40.6,  # elbow_flex
-        -48.999992,  # wrist_flex
+        -51.999992,  # wrist_flex
         90.0,  # wrist_roll
-        7.5,  # gripper
+        6.5,  # gripper
     ], dtype=np.float32),
 
     "neutral": np.array([
@@ -47,9 +47,26 @@ POSITIONS = {
         52.0,  # elbow_flex
         -64.0,  # wrist_flex
         90.0,  # wrist_roll
-        7.5,  # gripper
+        6.5,  # gripper
     ], dtype=np.float32),
-    
+
+    "left": np.array([
+        5.0,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        75.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "right": np.array([
+        -5.,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        110.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
 
     "reset": np.array([
         0,                  # shoulder_pan
@@ -350,7 +367,7 @@ def measure_joystick_response(articulation, object_art, robot, sim_step_fn,
         tilt_deg = np.rad2deg(object_art.data.joint_pos[robot.env_index].cpu().numpy())
         axis_deg = tilt_deg[pivot_x_idx]
         print(tilt_deg)
-        crossed = (axis_deg < -deadzone_deg) if target_name == "up" else (axis_deg > deadzone_deg)
+        crossed = (axis_deg < -deadzone_deg) if target_name == "up" or target_name== "right" else (axis_deg > deadzone_deg)
 
         if crossed:
             print(f"{target_name}: joystick crossed deadzone in {step+1} steps = {(step+1)*physics_dt:.3f}s")

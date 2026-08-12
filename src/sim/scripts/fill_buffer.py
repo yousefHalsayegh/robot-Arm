@@ -48,7 +48,7 @@ import sim.tasks.joystick.play_env_cfg as _cfg_module  # noqa: F401 — force mo
 
 import ale.config as config
  
-ALL_COMMANDS = [CMD_HOME, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT]
+ALL_COMMANDS = [CMD_LEFT, CMD_HOME, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_RIGHT]
 CMD_TO_TASK  = {
     CMD_NEUTRAL: "neutral", CMD_UP: "up",
     CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
@@ -56,11 +56,11 @@ CMD_TO_TASK  = {
 }
 TASK_CHAIN = {
     "home":    ["reset", "home"],
-    "neutral": ["home", "neutral"],
-    "up":      ["home", "neutral", "up"],
-    "down":    ["home", "neutral", "down"],
-    "left":    ["home", "neutral", "left"],   
-    "right":   ["home", "neutral", "right"],  
+    "neutral": ["reset", "home", "neutral"],
+    "up":      ["reset", "home", "neutral", "up"],
+    "down":    ["reset", "home", "neutral", "down"],
+    "left":    ["reset", "home", "neutral", "left"],   
+    "right":   ["reset", "home", "neutral", "right"],  
 }
 TASK_INDEX_TO_CMD = {
     0: CMD_UP,    
@@ -69,7 +69,9 @@ TASK_INDEX_TO_CMD = {
     3: CMD_DOWN,     
 
 }
-HOME_TOLERANCE_DEG = 5.0
+HOME_TOLERANCE_DEG = 0.3
+HOP_ARRIVAL_TOLERANCE_DEG = 1.5
+MAX_WINDOWS_PER_HOP = 30
 
 def _home_registered(robot, env_index: int) -> bool:
     """Mirrors home_reward's arrival check: all arm joints (incl. gripper)
@@ -286,70 +288,79 @@ def generate_synthetic_transitions(
     frame_stacks:   list[Frames],
     buffer:         ReplayBuffer,
     n_per_command:  int,
-    decision_steps: int,     
-    action_scale:   float,   
-    gamma:          float,   
+    decision_steps: int,
+    action_scale:   float,
+    gamma:          float,
     device:         str,
     simulation_app,
 ):
-
     fs    = frame_stacks[0]
     robot = base_env.scene["robot"]
     joystick_term = base_env.command_manager.get_term("joystick_cmd")
     total_pushed = 0
+    tolerance_rad = np.deg2rad(HOP_ARRIVAL_TOLERANCE_DEG)
 
-    n_windows_total = sum(len(TASK_CHAIN[CMD_TO_TASK[c]]) - 1
-                          for c in ALL_COMMANDS if CMD_TO_TASK[c] in POSITIONS
-                          and all(k in POSITIONS for k in TASK_CHAIN[CMD_TO_TASK[c]]))
+    valid_tasks = [
+        CMD_TO_TASK[c] for c in ALL_COMMANDS
+        if CMD_TO_TASK[c] in POSITIONS
+        and TASK_CHAIN.get(CMD_TO_TASK[c]) is not None
+        and all(k in POSITIONS for k in TASK_CHAIN[CMD_TO_TASK[c]])
+    ]
 
-    with tqdm(total=n_windows_total * n_per_command,
-              desc="Synthetic transitions", dynamic_ncols=True) as pbar:
+    # exact window count per hop isn't known in advance (depends on real PD
+    # convergence), so this is an indeterminate progress bar rather than a
+    # precise total
+    pbar = tqdm(desc="Synthetic transitions", dynamic_ncols=True)
 
-        for cmd in ALL_COMMANDS:
-            task = CMD_TO_TASK[cmd]
+    for cmd in ALL_COMMANDS:
+        task = CMD_TO_TASK[cmd]
 
-            if task not in POSITIONS:
-                print(f"skipping {task} — not in POSITIONS")
-                continue
+        if task not in POSITIONS:
+            print(f"skipping {task} — not in POSITIONS")
+            continue
 
-            chain = TASK_CHAIN.get(task)
-            if chain is None or not all(k in POSITIONS for k in chain):
-                missing = [k for k in (chain or []) if k not in POSITIONS]
-                print(f"skipping {task} — missing POSITIONS entries: {missing}")
-                continue
+        chain = TASK_CHAIN.get(task)
+        if chain is None or not all(k in POSITIONS for k in chain):
+            missing = [k for k in (chain or []) if k not in POSITIONS]
+            print(f"skipping {task} — missing POSITIONS entries: {missing}")
+            continue
 
-            for traj_idx in range(n_per_command):
+        for traj_idx in range(n_per_command):
 
-                joystick_term._command[0] = cmd
+            joystick_term._command[0] = cmd
 
-                # jittered teleport to the chain's first waypoint (reset)
-                start = POSITIONS[chain[0]] + np.deg2rad(
-                    np.random.uniform(-1.0, 1.0, size=len(POSITIONS[chain[0]]))
-                )
-                set_arm_joints(base_env, start, device)
-                sim_step(base_env, simulation_app)
-                update_frame_stack(base_env, [fs], reset_ids=[0])
+            start = POSITIONS[chain[0]] + np.deg2rad(
+                np.random.uniform(-1.0, 1.0, size=len(POSITIONS[chain[0]]))
+            )
+            set_arm_joints(base_env, start, device)
+            sim_step(base_env, simulation_app)
+            update_frame_stack(base_env, [fs], reset_ids=[0])
 
-                joint_pos_current = start.copy()
+            joint_pos_current = start.copy()
+            env_ids = torch.tensor([0], device=device)
 
-                # walk the chain, one decision window per hop
-                for hop_idx in range(len(chain) - 1):
-                    target_key = chain[hop_idx + 1]
-                    target = POSITIONS[target_key]
+            for hop_idx in range(len(chain) - 1):
+                target_key = chain[hop_idx + 1]
+                target = POSITIONS[target_key]
+                is_final_hop = (hop_idx == len(chain) - 2)
+
+                hop_done = False
+                window_count = 0
+
+
+                while window_count < MAX_WINDOWS_PER_HOP:
+                    window_count += 1
 
                     cam_state = (fs._get_state() * 255).round().astype(np.uint8)
 
                     raw_delta = (target - joint_pos_current) / decision_steps
                     action = np.clip(raw_delta, -action_scale, action_scale)
 
-                    target_t = torch.tensor(
-                        target, dtype=torch.float32, device=device
-                    ).unsqueeze(0)
+                    target_t = torch.tensor(target, dtype=torch.float32, device=device).unsqueeze(0)
 
                     discounted_reward = 0.0
-                    env_ids = torch.tensor([0], device=device)
                     for step_idx in range(decision_steps):
-                        robot.set_joint_position_target(target_t,  env_ids=env_ids)
+                        robot.set_joint_position_target(target_t, env_ids=env_ids)
                         robot.write_data_to_sim()
                         sim_step(base_env, simulation_app)
 
@@ -358,15 +369,15 @@ def generate_synthetic_transitions(
 
                     joint_pos_next = robot.data.joint_pos[0].cpu().numpy()
 
+
                     update_frame_stack(base_env, [fs])
                     cam_next = (fs._get_state() * 255).round().astype(np.uint8)
 
-                    is_final_hop = (hop_idx == len(chain) - 2)
                     if is_final_hop:
                         done = _home_registered(robot, 0) if task == "home" \
                                else joystick_registered(base_env.scene["object"], 0, task)
                     else:
-                        done = False   # intermediate hops (e.g. reset->home, home->neutral) aren't task completions
+                        done = False   
 
                     buffer.push(
                         cam_state, joint_pos_current, action.copy(), discounted_reward,
@@ -377,11 +388,21 @@ def generate_synthetic_transitions(
 
                     pbar.set_postfix({
                         "cmd": task, "hop": f"{hop_idx+1}/{len(chain)-1}",
-                        "traj": f"{traj_idx + 1}/{n_per_command}",
+                        "window": window_count, "traj": f"{traj_idx + 1}/{n_per_command}",
                         "done": done, "buffer": len(buffer), "pushed": total_pushed,
                     }, refresh=True)
                     pbar.update(1)
 
+                    reached_hop_target = np.max(np.abs(joint_pos_next - target)) < tolerance_rad
+                    if done or reached_hop_target:
+                        hop_done = True
+                        break
+
+                if not hop_done:
+                    print(f"[{task}] hop {hop_idx+1}/{len(chain)-1} never reached target "
+                          f"within {MAX_WINDOWS_PER_HOP} windows — moving on anyway")
+
+    pbar.close()
     print(f"synthetic generation done — buffer size: {len(buffer)}")
  
  
