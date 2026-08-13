@@ -378,7 +378,7 @@ class RecordCfg(RecorderManagerBaseCfg):
     """Recorder terms for the MDP — StreamingRecorderManager is substituted
     via a module-level monkey-patch in train.py, not via this cfg."""
 
-    dataset_export_dir_path: str = "logs/recordings"
+    dataset_export_dir_path: str = "logs/recordings2"
     dataset_filename: str = "dataset"
     dataset_export_mode: DatasetExportMode = DatasetExportMode.EXPORT_ALL
 

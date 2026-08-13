@@ -11,7 +11,7 @@ parser.add_argument("-ep",  "--episodes",      type=int,   default=10000)
 parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
 parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
 parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
-parser.add_argument("-c", "--capacity",    type=int,   default=1000000)
+parser.add_argument("-c", "--capacity",    type=int)
 parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
@@ -113,6 +113,13 @@ def training(args, env, simulation_app):
     if os.path.exists(args.prefill_path):
         with open(args.prefill_path, "rb") as f:
             brain.buffer = pickle.load(f)
+        if len(brain.buffer) > args.capacity: 
+            print("the loaded pre-filled buffer is larger than the passed capacity, either use a smaller buffer or create a new one")
+            return
+        elif brain.buffer.capacity != args.capacity:
+            print(f"fix the capcity from {brain.buffer.capacity} to {args.capacity}")
+            brain.buffer.capacity = args.capacity
+
         print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
     else:
         print(f"no prefill buffer found at {args.prefill_path} — generating one now")
@@ -144,6 +151,7 @@ def training(args, env, simulation_app):
         print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
         with open(args.prefill_path, "wb") as f:
             pickle.dump(brain.buffer, f)
+
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
@@ -206,7 +214,6 @@ def training(args, env, simulation_app):
                     torch.tensor(target_joints, dtype=torch.float32, device=device)
                 )
 
-                
                 dones = terminated | truncated
 
                 # ── update frame stacks ───────────────────────────────────────
@@ -229,6 +236,7 @@ def training(args, env, simulation_app):
                     prev_joint_pos_deg[i] = current_joint_deg
                     
                     normalised_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
+
 
                     episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * normalised_reward
 
@@ -255,7 +263,7 @@ def training(args, env, simulation_app):
                             cam_next[i], joint_next[i], steps
                         )
                         decision_steps[i]  = 0
-                        episode_return[i]  = 0.0
+
                         
                     if done_i or timeout_i:
                         # check if success or timeout
@@ -368,6 +376,8 @@ def training(args, env, simulation_app):
                         # update decision state reference
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
+                        episode_return[i] = 0
+                        decision_steps[i]  = 0
                         action_decision[i] = brain.predict_next_action(cam_next[i].astype(np.float32)/255.0, joint_next[i], steps)
                         
 
@@ -378,6 +388,7 @@ def training(args, env, simulation_app):
                     wandb.log({
                             "train/speed": abs(time.time() - start),
                     }, step=steps)
+
 
 
 

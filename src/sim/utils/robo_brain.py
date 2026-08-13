@@ -380,12 +380,14 @@ class ReplayBuffer:
     """
  
     def __init__(self, capacity: int, alpha: float = 0.6, beta: float = 0.4):
-        self.capacity  = int(capacity)
+
+        self.capacity  = capacity
         self.alpha     = alpha
         self.beta      = beta
         self.buffer    = []
         self.priorities = np.zeros(int(capacity), dtype=np.float32)
         self.pos       = 0
+
  
     def push(self, *args):
         max_priority = self.priorities.max() if self.buffer else 1.0
