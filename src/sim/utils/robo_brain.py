@@ -64,6 +64,9 @@ class Brain:
 
         self.buffer       = ReplayBuffer(c)
         self.reward = RunningNormaliser()
+        self.success_count = 0
+        self.min_successes_before_decay = 10  
+        self.alpha_floor = 0.01
 
 
 
@@ -178,6 +181,9 @@ class Brain:
         self.alpha_optimiser.zero_grad()
         alpha_loss.backward()
         self.alpha_optimiser.step()
+        if self.success_count < self.min_successes_before_decay:
+            with torch.no_grad():
+                self.log_alpha.clamp_(min=np.log(self.alpha_floor))
 
         # soft update
         self._soft_update(self.encoder,   self.target_encoder)

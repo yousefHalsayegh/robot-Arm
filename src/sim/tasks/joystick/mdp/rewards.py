@@ -45,17 +45,73 @@ WHITE_UPPER = np.array([180, 60, 255])
 
 MIN_BLOB_AREA = 20
 
-POSITIONS_HOME = np.array([
-    0,      # shoulder_pan
-    12,     # shoulder_lift
-    53.0,   # elbow_flex
-    -63.0,  # wrist_flex
-    90.0,   # wrist_roll
-    38.717498779296875,  # gripper (open)
-], dtype=np.float32)
+POSITIONS = {
+    "home": np.array([
+        0,  # shoulder_pan
+        12,  # shoulder_lift
+        53.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        90.0,  # wrist_roll
+        38.717498779296875,  # gripper
+    ], dtype=np.float32),
+
+    "down": np.array([
+        -0.4,  # shoulder_pan
+        12,  # shoulder_lift
+        70.0,  # elbow_flex
+        -110.0,  # wrist_flex
+        90.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "up": np.array([
+        -0.4,  # shoulder_pan
+        12,  # shoulder_lift
+        40.6,  # elbow_flex
+        -51.999992,  # wrist_flex
+        90.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "neutral": np.array([
+        -0.4,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        90.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "left": np.array([
+        5.0,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        75.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "right": np.array([
+        -5.,  # shoulder_pan
+        12,  # shoulder_lift
+        52.0,  # elbow_flex
+        -64.0,  # wrist_flex
+        110.0,  # wrist_roll
+        6.5,  # gripper
+    ], dtype=np.float32),
+
+    "reset": np.array([
+        0,                  # shoulder_pan
+        -97.40282517223994,   # shoulder_lift
+        91.67324722093173,    # elbow_flex
+        -85.94366926962348,   # wrist_flex
+        90.0,    # wrist_roll
+        0.0,                  # gripper
+    ], dtype=np.float32),
+}
 
 HOME_TOLERANCE_DEG = 3.0   
-
+GRIPPER_WRIST_DEG = 5.0 
 
 def _largest_contour_centroid(mask, min_area=MIN_BLOB_AREA):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -195,7 +251,7 @@ def home_reward(env, weight=1.0) -> torch.Tensor:
     reward = torch.zeros(env.num_envs, device=env.device)
 
     home_target_rad = torch.tensor(
-        np.deg2rad(POSITIONS_HOME), device=env.device, dtype=torch.float32
+        np.deg2rad(POSITIONS["home"]), device=env.device, dtype=torch.float32
     )
     tol_rad = np.deg2rad(HOME_TOLERANCE_DEG)
 
@@ -240,5 +296,32 @@ def vision_shaping_reward(
                 approach_dist = np.sqrt((ax - jx) ** 2 + (ay - jy) ** 2)
                 reward[i] += weight_approach * (1.0 - min(approach_dist / max_dist, 1.0))
        
+
+    return reward
+
+
+def gripper_wrist_shaping_reward(env, weight: float = 1.0) -> torch.Tensor:
+
+    commands = env.command_manager.get_command("joystick_cmd")
+    robot = env.scene["robot"]
+    reward = torch.zeros(env.num_envs, device=env.device)
+    scale_rad = np.deg2rad(GRIPPER_WRIST_DEG)
+
+    for i in range(env.num_envs):
+        cmd = int(commands[i].item())
+        task = CMD_TO_TASK[cmd]
+        if task not in POSITIONS:
+            continue
+
+        target = torch.tensor(POSITIONS[task], device=env.device, dtype=robot.data.joint_pos.dtype)
+        joint_pos = robot.data.joint_pos[i]
+
+        gripper_error = torch.abs(joint_pos[5] - target[5])
+        wrist_error = torch.abs(joint_pos[4] - target[4])
+
+        gripper_reward = torch.exp(-gripper_error / scale_rad)   # bounded (0,1], 1 at perfect match
+        wrist_reward = torch.exp(-wrist_error / scale_rad)
+
+        reward[i] = weight * (gripper_reward + wrist_reward) / 2.0
 
     return reward

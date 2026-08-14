@@ -65,7 +65,7 @@ class SideCameraRecorder(RecorderTerm):
     def __init__(self, cfg, env):
         super().__init__(cfg, env)
         self._step_counter = 0
-        self._record_every_n = 10 
+        self._record_every_n = 100 
         
     def record_post_step(self):
         camera = self._env.scene["side"]
@@ -350,7 +350,7 @@ class RewardsCfg:
         )
     step_penalty = RewTerm(
             func=mdp.step_penalty,
-            weight=0.1,
+            weight=0.01,
             params={
                 "current_budget":500,   # 5s * 100Hz / decimation
                 "weight": 0.1,
@@ -368,9 +368,14 @@ class RewardsCfg:
         )
     vision_shaping = RewTerm(
             func=mdp.vision_shaping_reward, 
-            weight=0.5, 
+            weight=0.01, 
             params={"weight_center": 0.2, "weight_approach": 0.5}
         )
+    gripper_wrist_shaping = RewTerm(
+                func=mdp.gripper_wrist_shaping_reward, 
+                weight=0.05, 
+                params={"weight": 0.05}
+            )
     
 
 @configclass

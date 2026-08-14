@@ -23,22 +23,17 @@ def ball_position(obs):
         """
 
         #divides the screen into where the court (mid side) and player (right side) of the screens
-        court =obs[15:75, 5:80]
-        player = obs[15:75, 75:84]
+        court =obs[15:77, 12:71]
+        player = obs[15:77, 72:76]
 
         #Locates the location of the ball using thresholds for the intensity then extracting the Y axis
-        ball_pixels = np.argwhere((court > 0.7) & (court < 0.9))
-        MIN_BALL_PIXELS = 1
-        MAX_BALL_PIXELS = 8
-        if MIN_BALL_PIXELS <= len(ball_pixels) <= MAX_BALL_PIXELS:
-            ball_y = float(np.mean(ball_pixels[:, 0]))
-        else:
-            ball_y = None
- 
+        ball_pixels = np.argwhere((court > 0.4) & (court < 0.9))
+        ball_y = float(np.mean(ball_pixels[:, 0])) if len(ball_pixels) > 0 else None
+
 
 
         #Locates the location of the player paddle using thresholds for the intensity then extracting the Y axis
-        paddle_pixels = np.argwhere((player > 0.4) & (player < 0.9))
+        paddle_pixels = np.argwhere((player > 0.5) & (player < 0.7))
         paddle_y = float(np.mean(paddle_pixels[:, 0])) if len(paddle_pixels) > 0 else None
         return ball_y, paddle_y
 
@@ -121,12 +116,7 @@ def main():
 
             new_ball_y, new_paddle_y = ball_position(obs[-1])
             action = choose_action(new_ball_y, new_paddle_y)
-            print(robot.task)
             robot.task = actions[action]
-
-            if actions[robot.action] == robot.task:
-                print(abs(start - time.perf_counter()))
-                start = time.perf_counter()
     
             render = env.render()
             surf = pygame.surfarray.make_surface(render.transpose(1, 0, 2))

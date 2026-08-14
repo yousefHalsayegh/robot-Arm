@@ -170,9 +170,7 @@ def training(args, env, simulation_app):
             project="RL for Games",
             name=f"Sim-{args.job_name}",
             config={k: v for k, v in vars(args).items()
-                    if k not in {"job_name"}},
-            resume="allow",
-            id="n3g8r8rd"
+                    if k not in {"job_name"}}
         )
 
     # ── ALE envs via SyncVectorEnv ────────────────────────────────

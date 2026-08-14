@@ -267,6 +267,8 @@ def training(args, env, simulation_app):
                         
                     if done_i or timeout_i:
                         # check if success or timeout
+                        if done_i:
+                            brain.success_count += 1
     
                         registered = bool(terminated[i].item())
                         # push to buffer
@@ -350,7 +352,6 @@ def training(args, env, simulation_app):
                             }, step=steps)
                                 
 
-                        
 
                         if episode % args.mid_save == 0 and episode != 0:
                             brain.save_checkpoint(
