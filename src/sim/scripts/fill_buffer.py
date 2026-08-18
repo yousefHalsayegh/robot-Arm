@@ -35,7 +35,7 @@ import os
 import gymnasium as gym
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
-
+import wandb
 from sim.utils.robo_brain import ReplayBuffer
 from sim.tasks.joystick.mdp.observations import update_frame_stack, Frames
 from sim.tasks.joystick.mdp.rewards import (
@@ -293,6 +293,10 @@ def generate_synthetic_transitions(
     gamma:          float,
     device:         str,
     simulation_app,
+    brain = None,
+    args_wandb= False,
+    steps_counter = 0,
+    train_n_pushes=10
 ):
     fs    = frame_stacks[0]
     robot = base_env.scene["robot"]
@@ -385,6 +389,20 @@ def generate_synthetic_transitions(
                     )
                     total_pushed += 1
                     joint_pos_current = joint_pos_next
+
+                    if total_pushed % train_n_pushes == 0 and len(buffer) >= brain.warmup and brain is not None:
+                        critic_loss, actor_loss, train_diagnostics = brain.train()
+                        steps_counter[0] += 1
+
+                        if args_wandb:
+                            wandb.log({
+                                "pretrain/critic_loss": critic_loss,
+                                "pretrain/actor_loss":  actor_loss,
+                                "pretrain/alpha":       brain.alpha.item(),
+                                "pretrain/buffer_size": len(buffer),
+                                "pretrain/total_pushed": total_pushed,
+                                **{f"pretrain/{k.split('/')[-1]}": v for k, v in train_diagnostics.items()},
+                            }, step=steps_counter[0])
 
                     pbar.set_postfix({
                         "cmd": task, "hop": f"{hop_idx+1}/{len(chain)-1}",

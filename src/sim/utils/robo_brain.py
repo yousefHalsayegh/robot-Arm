@@ -182,6 +182,7 @@ class Brain:
         alpha_loss.backward()
         self.alpha_optimiser.step()
         if self.success_count < self.min_successes_before_decay:
+            
             with torch.no_grad():
                 self.log_alpha.clamp_(min=np.log(self.alpha_floor))
 
@@ -240,7 +241,7 @@ class Brain:
  
     def load_checkpoint(self, path: str) -> tuple[int, int]:
         ckpt = torch.load(path, map_location=self.device)
-        self.policy.load_state_dict(ckpt["policy"])
+        self.critic.load_state_dict(ckpt["critic"])
         self.target.load_state_dict(ckpt["target"])
         self.optimiser.load_state_dict(ckpt["optimiser"])
         self.reward.load_state_dict(ckpt.get("norm_success", {}))
@@ -385,7 +386,7 @@ class ReplayBuffer:
     transitions are visited more frequently than zero-reward ones.
     """
  
-    def __init__(self, capacity: int, alpha: float = 0.6, beta: float = 0.4):
+    def __init__(self, capacity: int, alpha: float = 0.6, beta: float = 0.4, use_priority=False):
 
         self.capacity  = capacity
         self.alpha     = alpha
@@ -393,6 +394,7 @@ class ReplayBuffer:
         self.buffer    = []
         self.priorities = np.zeros(int(capacity), dtype=np.float32)
         self.pos       = 0
+        self.use_priority = use_priority
 
  
     def push(self, *args):
@@ -408,6 +410,13 @@ class ReplayBuffer:
  
     def sample(self, batch_size: int):
         n          = len(self.buffer)
+
+        if not self.use_priority:
+            indices = np.random.choice(n, batch_size, replace=False)
+            samples = [self.buffer[i] for i in indices]
+            weights = torch.ones(batch_size)  # uniform — no correction needed
+            return samples, indices, weights
+        
         priorities = self.priorities[:n]
         probs      = priorities ** self.alpha
         probs     /= probs.sum()

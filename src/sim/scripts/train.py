@@ -18,7 +18,7 @@ parser.add_argument("--cam_embedding",   type=int, default=256)
 parser.add_argument("--joint_embedding", type=int, default=64)
 parser.add_argument("-ds", "--decision_steps", type=int, default=30)
 parser.add_argument("--lerobot_repo_id",   type=str, default=None)
-parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=500)
+parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=100)
 parser.add_argument("--action_scale_deg",  type=float, default=5.0)
 parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
 
@@ -109,7 +109,7 @@ def training(args, env, simulation_app):
 
     # ── frame stacks — one per env ────────────────────────────────────────────
     frame_stacks = [Frames(n=4) for _ in range(N)]
-
+    steps_counter = [0]
     if os.path.exists(args.prefill_path):
         with open(args.prefill_path, "rb") as f:
             brain.buffer = pickle.load(f)
@@ -146,6 +146,9 @@ def training(args, env, simulation_app):
             gamma=brain.gamma,
             device=device,
             simulation_app=simulation_app,
+            brain=brain,
+            steps_counter=steps_counter,
+            args_wandb=args.wandb
         )
 
         print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
@@ -235,10 +238,10 @@ def training(args, env, simulation_app):
                     joint_delta_deg = current_joint_deg - prev_joint_pos_deg[i]
                     prev_joint_pos_deg[i] = current_joint_deg
                     
-                    normalised_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
+                    clipped_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
 
 
-                    episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * normalised_reward
+                    episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * clipped_reward
 
                     timeout_i = episode_steps[i] >= int(base_env.cfg.episode_length_s * 100)
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
@@ -268,6 +271,7 @@ def training(args, env, simulation_app):
                     if done_i or timeout_i:
                         # check if success or timeout
                         if done_i:
+                            print("succ")
                             brain.success_count += 1
     
                         registered = bool(terminated[i].item())
@@ -338,6 +342,7 @@ def training(args, env, simulation_app):
                                 "train/buffer_size": len(brain.buffer),
                                 "train/steps":       steps,
                                 "episode/episode_return": episode_return[i],
+                                "episode/actual_reward": rewards[i],
                                 "episode/success":       float(registered),
                                 "episode/steps_taken":   episode_steps[i],
                                 "episode/episode_time_s": ep_time,

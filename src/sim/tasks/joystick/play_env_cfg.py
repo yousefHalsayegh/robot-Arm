@@ -34,8 +34,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import quat_mul
 
-from sim.enhance.managers.recorder_manager import StreamingRecorderManager
-_mbe.RecorderManager = StreamingRecorderManager
+# from sim.enhance.managers.recorder_manager import StreamingRecorderManager
+# _mbe.RecorderManager = StreamingRecorderManager
 # arcade stick default pose from joint_pos_env_cfg.py InitialStateCfg
 STICK_DEFAULT_POS = [0.305, -0.058, 0.0]
 STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
@@ -350,7 +350,7 @@ class RewardsCfg:
         )
     step_penalty = RewTerm(
             func=mdp.step_penalty,
-            weight=0.01,
+            weight=1.0,
             params={
                 "current_budget":500,   # 5s * 100Hz / decimation
                 "weight": 0.1,
@@ -358,7 +358,7 @@ class RewardsCfg:
         )
     axis_bonus = RewTerm(
             func=mdp.axis_bonus,
-            weight=0.5,
+            weight=1.0,
             params={"weight": 0.5},
         )
     home_success = RewTerm(
@@ -368,16 +368,16 @@ class RewardsCfg:
         )
     vision_shaping = RewTerm(
             func=mdp.vision_shaping_reward, 
-            weight=0.01, 
+            weight=1.0, 
             params={"weight_center": 0.2, "weight_approach": 0.5}
         )
     gripper_wrist_shaping = RewTerm(
                 func=mdp.gripper_wrist_shaping_reward, 
-                weight=0.05, 
-                params={"weight": 0.05}
+                weight=1.0, 
+                params={"weight": 0.5}
             )
     
-
+#TODO; fix the memory problem since it is saving too much 
 @configclass
 class RecordCfg(RecorderManagerBaseCfg):
     """Recorder terms for the MDP — StreamingRecorderManager is substituted
@@ -417,7 +417,7 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     terminations: TerminationsCfg = TerminationsCfg()
     rewards : RewardsCfg = RewardsCfg()
-    recorders: RecordCfg = RecordCfg()
+    #recorders: RecordCfg = RecordCfg()
     events: EventCfg = EventCfg()
 
 
