@@ -57,10 +57,10 @@ CMD_TO_TASK  = {
 TASK_CHAIN = {
     "home":    ["reset", "home"],
     "neutral": ["reset", "home", "neutral"],
-    "up":      ["reset", "home", "neutral", "up"],
-    "down":    ["reset", "home", "neutral", "down"],
-    "left":    ["reset", "home", "neutral", "left"],   
-    "right":   ["reset", "home", "neutral", "right"],  
+    "up":      ["neutral", "up"],
+    "down":    ["neutral", "down"],
+    "left":    ["neutral", "left"],   
+    "right":   ["neutral", "right"],  
 }
 TASK_INDEX_TO_CMD = {
     0: CMD_UP,    
@@ -69,9 +69,27 @@ TASK_INDEX_TO_CMD = {
     3: CMD_DOWN,     
 
 }
+
+HOP_TASK_NAME = {
+    ("reset", "home"): "go to home",
+    ("home", "neutral"): "start",
+    ("neutral", "up"): "go to up",
+    ("neutral", "down"): "go to down",
+    ("neutral", "left"): "go to left",
+    ("neutral", "right"): "go to right",
+}
+
 HOME_TOLERANCE_DEG = 0.3
 HOP_ARRIVAL_TOLERANCE_DEG = 1.5
 MAX_WINDOWS_PER_HOP = 30
+
+def get_newest_rgb_frame(cam_state_uint8: np.ndarray) -> np.ndarray:
+
+    return np.stack([cam_state_uint8[12], cam_state_uint8[13], cam_state_uint8[14]], axis=-1)  # [224,224,3]
+
+def is_warmup_hop(hop_idx: int, chain_len: int) -> bool:
+
+    return hop_idx != (chain_len - 2)
 
 def _home_registered(robot, env_index: int) -> bool:
     """Mirrors home_reward's arrival check: all arm joints (incl. gripper)
@@ -284,145 +302,129 @@ def convert_lerobot_to_buffer(
 # ── Source 2 — Synthetic POSITIONS transitions ────────────────────────────────
  
 def generate_synthetic_transitions(
-    base_env,
-    frame_stacks:   list[Frames],
-    buffer:         ReplayBuffer,
-    n_per_command:  int,
-    decision_steps: int,
-    action_scale:   float,
-    gamma:          float,
-    device:         str,
-    simulation_app,
-    brain = None,
-    args_wandb= False,
-    steps_counter = 0,
-    train_n_pushes=10
+    base_env, frame_stacks, buffer, brain, steps_counter,
+    n_per_command, decision_steps, action_scale, gamma, device, simulation_app,
+    args_wandb=False, train_every_n_pushes=10,
+    export_lerobot=False   
 ):
-    fs    = frame_stacks[0]
+    fs = frame_stacks[0]
     robot = base_env.scene["robot"]
     joystick_term = base_env.command_manager.get_term("joystick_cmd")
     total_pushed = 0
-    tolerance_rad = np.deg2rad(HOP_ARRIVAL_TOLERANCE_DEG)
+    successful_hops = 0   
 
-    valid_tasks = [
-        CMD_TO_TASK[c] for c in ALL_COMMANDS
-        if CMD_TO_TASK[c] in POSITIONS
-        and TASK_CHAIN.get(CMD_TO_TASK[c]) is not None
-        and all(k in POSITIONS for k in TASK_CHAIN[CMD_TO_TASK[c]])
-    ]
+    lerobot_dataset = None
+    if export_lerobot:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        lerobot_dataset = LeRobotDataset.create(
+            repo_id="local/joystick_synthetic",
+            fps=int(1.0 / (decision_steps * base_env.sim.get_physics_dt())),
+            root="/home/yousef/.cache/huggingface/lerobot/",
+            features={
+                "observation.state": {"dtype": "float32", "shape": (6,),
+                    "names": ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos",
+                              "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]},
+                "action": {"dtype": "float32", "shape": (6,),
+                    "names": ["shoulder_pan.pos", "shoulder_lift.pos", "elbow_flex.pos",
+                              "wrist_flex.pos", "wrist_roll.pos", "gripper.pos"]},
+                "observation.images.side": {"dtype": "video", "shape": (224, 224, 3),
+                    "names": ["height", "width", "channels"]},
+            },
+        )
 
-    # exact window count per hop isn't known in advance (depends on real PD
-    # convergence), so this is an indeterminate progress bar rather than a
-    # precise total
-    pbar = tqdm(desc="Synthetic transitions", dynamic_ncols=True)
+    valid_tasks = [(cmd, task, chain) for cmd in ALL_COMMANDS
+                   for task in [CMD_TO_TASK[cmd]] if task in POSITIONS
+                   for chain in [TASK_CHAIN.get(task)]
+                   if chain and all(k in POSITIONS for k in chain)]
 
-    for cmd in ALL_COMMANDS:
-        task = CMD_TO_TASK[cmd]
+    schedule = []
+    for cmd, task, chain in valid_tasks:
+        schedule.extend([(cmd, task, chain)] * n_per_command)
+    np.random.shuffle(schedule)
 
-        if task not in POSITIONS:
-            print(f"skipping {task} — not in POSITIONS")
-            continue
+    per_task_traj_counter = {task: 0 for _, task, _ in valid_tasks}
 
-        chain = TASK_CHAIN.get(task)
-        if chain is None or not all(k in POSITIONS for k in chain):
-            missing = [k for k in (chain or []) if k not in POSITIONS]
-            print(f"skipping {task} — missing POSITIONS entries: {missing}")
-            continue
-
-        for traj_idx in range(n_per_command):
+    with tqdm(total=len(schedule), desc="Synthetic transitions", dynamic_ncols=True) as pbar:
+        for cmd, task, chain in schedule:
+            per_task_traj_counter[task] += 1
+            traj_idx = per_task_traj_counter[task]
 
             joystick_term._command[0] = cmd
-
-            start = POSITIONS[chain[0]] + np.deg2rad(
-                np.random.uniform(-1.0, 1.0, size=len(POSITIONS[chain[0]]))
-            )
+            start = POSITIONS[chain[0]] + np.deg2rad(np.random.uniform(-1.0, 1.0, size=len(POSITIONS[chain[0]])))
             set_arm_joints(base_env, start, device)
             sim_step(base_env, simulation_app)
             update_frame_stack(base_env, [fs], reset_ids=[0])
-
             joint_pos_current = start.copy()
-            env_ids = torch.tensor([0], device=device)
 
             for hop_idx in range(len(chain) - 1):
                 target_key = chain[hop_idx + 1]
                 target = POSITIONS[target_key]
+                warmup = is_warmup_hop(hop_idx, len(chain))
+
+                cam_state = (fs._get_state() * 255).round().astype(np.uint8)
+                raw_delta = (target - joint_pos_current) / decision_steps
+                action = np.clip(raw_delta, -action_scale, action_scale)
+                target_t = torch.tensor(target, dtype=torch.float32, device=device).unsqueeze(0)
+
+                discounted_reward = 0.0
+                for step_idx in range(decision_steps):
+                    robot.set_joint_position_target(target_t, env_ids=torch.tensor([0], device=device))
+                    robot.write_data_to_sim()
+                    sim_step(base_env, simulation_app)
+                    step_reward_tensor = base_env.reward_manager.compute(dt=base_env.step_dt)
+                    discounted_reward += (gamma ** step_idx) * float(step_reward_tensor[0].item())
+
+                joint_pos_next = robot.data.joint_pos[0].cpu().numpy()
+                update_frame_stack(base_env, [fs])
+                cam_next = (fs._get_state() * 255).round().astype(np.uint8)
+
                 is_final_hop = (hop_idx == len(chain) - 2)
+                done = (_home_registered(robot, 0) if task == "home"
+                        else joystick_registered(base_env.scene["object"], 0, task)) if is_final_hop else False
 
-                hop_done = False
-                window_count = 0
-
-
-                while window_count < MAX_WINDOWS_PER_HOP:
-                    window_count += 1
-
-                    cam_state = (fs._get_state() * 255).round().astype(np.uint8)
-
-                    raw_delta = (target - joint_pos_current) / decision_steps
-                    action = np.clip(raw_delta, -action_scale, action_scale)
-
-                    target_t = torch.tensor(target, dtype=torch.float32, device=device).unsqueeze(0)
-
-                    discounted_reward = 0.0
-                    for step_idx in range(decision_steps):
-                        robot.set_joint_position_target(target_t, env_ids=env_ids)
-                        robot.write_data_to_sim()
-                        sim_step(base_env, simulation_app)
-
-                        step_reward_tensor = base_env.reward_manager.compute(dt=base_env.step_dt)
-                        discounted_reward += (gamma ** step_idx) * float(step_reward_tensor[0].item())
-
-                    joint_pos_next = robot.data.joint_pos[0].cpu().numpy()
-
-
-                    update_frame_stack(base_env, [fs])
-                    cam_next = (fs._get_state() * 255).round().astype(np.uint8)
-
-                    if is_final_hop:
-                        done = _home_registered(robot, 0) if task == "home" \
-                               else joystick_registered(base_env.scene["object"], 0, task)
-                    else:
-                        done = False   
-
-                    buffer.push(
-                        cam_state, joint_pos_current, action.copy(), discounted_reward,
-                        cam_next, joint_pos_next.copy(), float(done), decision_steps,
-                    )
+                if not warmup:
+                    buffer.push(cam_state, joint_pos_current, action.copy(), discounted_reward,
+                                cam_next, joint_pos_next.copy(), float(done), decision_steps)
                     total_pushed += 1
-                    joint_pos_current = joint_pos_next
+                    if done:
+                        successful_hops += 1   # NEW
 
-                    if total_pushed % train_n_pushes == 0 and len(buffer) >= brain.warmup and brain is not None:
+                    if total_pushed % train_every_n_pushes == 0:
                         critic_loss, actor_loss, train_diagnostics = brain.train()
                         steps_counter[0] += 1
-
                         if args_wandb:
                             wandb.log({
                                 "pretrain/critic_loss": critic_loss,
-                                "pretrain/actor_loss":  actor_loss,
-                                "pretrain/alpha":       brain.alpha.item(),
-                                "pretrain/buffer_size": len(buffer),
-                                "pretrain/total_pushed": total_pushed,
+                                "pretrain/actor_loss": actor_loss,
+                                "pretrain/alpha": brain.alpha.item(),
+                                "pretrain/successful_hops": successful_hops,   
+                                "pretrain/success_rate": successful_hops / max(total_pushed, 1),  
                                 **{f"pretrain/{k.split('/')[-1]}": v for k, v in train_diagnostics.items()},
                             }, step=steps_counter[0])
 
-                    pbar.set_postfix({
-                        "cmd": task, "hop": f"{hop_idx+1}/{len(chain)-1}",
-                        "window": window_count, "traj": f"{traj_idx + 1}/{n_per_command}",
-                        "done": done, "buffer": len(buffer), "pushed": total_pushed,
-                    }, refresh=True)
-                    pbar.update(1)
+                    if lerobot_dataset is not None:
+                        task_str = HOP_TASK_NAME.get((chain[hop_idx], target_key), f"go to {target_key}")
+                        lerobot_dataset.add_frame({
+                            "observation.state": np.rad2deg(joint_pos_current).astype(np.float32),
+                            "observation.images.side": get_newest_rgb_frame(cam_next),
+                            "action": np.rad2deg(target).astype(np.float32),
+                            "task": task_str,
+                        })
 
-                    reached_hop_target = np.max(np.abs(joint_pos_next - target)) < tolerance_rad
-                    if done or reached_hop_target:
-                        hop_done = True
-                        break
+                joint_pos_current = joint_pos_next
 
-                if not hop_done:
-                    print(f"[{task}] hop {hop_idx+1}/{len(chain)-1} never reached target "
-                          f"within {MAX_WINDOWS_PER_HOP} windows — moving on anyway")
+            if lerobot_dataset is not None:
+                lerobot_dataset.save_episode()
 
-    pbar.close()
-    print(f"synthetic generation done — buffer size: {len(buffer)}")
- 
+            pbar.set_postfix({"cmd": task, "traj": f"{traj_idx}/{n_per_command}",
+                              "pushed": total_pushed, "successes": successful_hops}, refresh=True)
+            pbar.update(1)
+
+    if lerobot_dataset is not None:
+        lerobot_dataset.finalize()
+
+    print(f"synthetic generation done — buffer size: {len(buffer)}, "
+          f"successful hops: {successful_hops}/{total_pushed}")
  
 
  

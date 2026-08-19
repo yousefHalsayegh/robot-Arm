@@ -21,6 +21,8 @@ parser.add_argument("--lerobot_repo_id",   type=str, default=None)
 parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=100)
 parser.add_argument("--action_scale_deg",  type=float, default=5.0)
 parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
+parser.add_argument("--export_lerobot", action="store_true")
+
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -148,7 +150,8 @@ def training(args, env, simulation_app):
             simulation_app=simulation_app,
             brain=brain,
             steps_counter=steps_counter,
-            args_wandb=args.wandb
+            args_wandb=args.wandb,
+            export_lerobot=args.export_lerobot,
         )
 
         print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
@@ -189,7 +192,7 @@ def training(args, env, simulation_app):
     cam_decision   = cam_states.copy()
     joint_decision = joint_states.copy()
 
-    action_decision = brain.predict_next_action_batch(cam_states,  joint_states, steps)
+    action_decision = brain.predict_next_action_batch(cam_states,  joint_states)
     prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
 
     try:
@@ -245,33 +248,12 @@ def training(args, env, simulation_app):
 
                     timeout_i = episode_steps[i] >= int(base_env.cfg.episode_length_s * 100)
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
-                    if decision_boundary:
-
-                        brain.buffer.push(
-                                    (cam_decision[i] * 255).round().astype(np.uint8),
-                                    joint_decision[i],
-                                    actions[i].copy(),
-                                    episode_return[i],
-                                    (cam_next[i]* 255).round().astype(np.uint8),
-                                    joint_next[i],
-                                    float(done_i),
-                                    decision_steps[i],
-                                )
-
-                        steps += 1 
-                        critic_loss, actor_loss, train_diagnostics = brain.train()
-                        cam_decision[i]   = cam_next[i].copy()
-                        joint_decision[i] = joint_next[i].copy()
-                        action_decision[i] = brain.predict_next_action(
-                            cam_next[i], joint_next[i], steps
-                        )
-                        decision_steps[i]  = 0
+                    
 
                         
                     if done_i or timeout_i:
                         # check if success or timeout
                         if done_i:
-                            print("succ")
                             brain.success_count += 1
     
                         registered = bool(terminated[i].item())
@@ -384,7 +366,29 @@ def training(args, env, simulation_app):
                         joint_decision[i] = joint_next[i].copy()
                         episode_return[i] = 0
                         decision_steps[i]  = 0
-                        action_decision[i] = brain.predict_next_action(cam_next[i].astype(np.float32)/255.0, joint_next[i], steps)
+                        action_decision[i] = brain.predict_next_action(cam_next[i], joint_next[i])
+
+                    elif decision_boundary:
+
+                        brain.buffer.push(
+                                    (cam_decision[i] * 255).round().astype(np.uint8),
+                                    joint_decision[i],
+                                    actions[i].copy(),
+                                    episode_return[i],
+                                    (cam_next[i]* 255).round().astype(np.uint8),
+                                    joint_next[i],
+                                    float(done_i),
+                                    decision_steps[i],
+                                )
+
+                        steps += 1 
+                        critic_loss, actor_loss, train_diagnostics = brain.train()
+                        cam_decision[i]   = cam_next[i].copy()
+                        joint_decision[i] = joint_next[i].copy()
+                        action_decision[i] = brain.predict_next_action(
+                            cam_next[i], joint_next[i]
+                        )
+                        decision_steps[i]  = 0
                         
 
                 # update states for next step
