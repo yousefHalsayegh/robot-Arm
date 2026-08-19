@@ -21,7 +21,8 @@ parser.add_argument("--lerobot_repo_id",   type=str, default=None)
 parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=100)
 parser.add_argument("--action_scale_deg",  type=float, default=5.0)
 parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
-parser.add_argument("--export_lerobot", action="store_true")
+parser.add_argument("--export_lerobot", default=True,
+                    action=argparse.BooleanOptionalAction)
 
 
 AppLauncher.add_app_launcher_args(parser)
