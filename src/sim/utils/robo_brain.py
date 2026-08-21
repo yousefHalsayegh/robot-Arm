@@ -241,11 +241,26 @@ class Brain:
  
     def load_checkpoint(self, path: str) -> tuple[int, int]:
         ckpt = torch.load(path, map_location=self.device)
+
+        self.encoder.load_state_dict(ckpt["encoder"])
+        self.joint_mlp.load_state_dict(ckpt["joint_mlp"])
+        self.target_encoder.load_state_dict(ckpt["target_encoder"])
+        self.target_joint_mlp.load_state_dict(ckpt["target_joint_mlp"])
+        self.actor.load_state_dict(ckpt["actor"])
         self.critic.load_state_dict(ckpt["critic"])
-        self.target.load_state_dict(ckpt["target"])
-        self.optimiser.load_state_dict(ckpt["optimiser"])
-        self.reward.load_state_dict(ckpt.get("norm_success", {}))
+        self.critic_target.load_state_dict(ckpt["critic_target"])
+
+        self.critic_optimiser.load_state_dict(ckpt["critic_opt"])
+        self.actor_optimiser.load_state_dict(ckpt["actor_opt"])
+        self.alpha_optimiser.load_state_dict(ckpt["alpha_opt"])
+
+        self.log_alpha.data.copy_(ckpt["log_alpha"].to(self.device))
+
+        if "norm_success" in ckpt:
+            self.reward.load_state_dict(ckpt["norm_success"])
+
         return ckpt.get("steps", 0), ckpt.get("episode", 0)
+    
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()

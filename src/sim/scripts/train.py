@@ -55,7 +55,7 @@ from sim.tasks.joystick.play_env_cfg import (
 )
 
 
-from sim.scripts.fill_buffer import (   
+from sim.utils.buffer import (   
     convert_lerobot_to_buffer,
     generate_synthetic_transitions,
 )
@@ -92,7 +92,8 @@ def training(args, env, simulation_app):
 
     steps, start_ep = 0, 0
     ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
-    ckpt_path = f"{ckpt_dir}/{args.checkpoint}.pth"
+    ckpt_path = f"{ckpt_dir}/manipulation_brain_{args.checkpoint}.pth"
+    print(ckpt_path)
     if args.checkpoint and os.path.exists(ckpt_path):
         steps, start_ep = brain.load_checkpoint(ckpt_path)
         print(f"loaded: {ckpt_path}")
@@ -108,6 +109,8 @@ def training(args, env, simulation_app):
             name=f"LowLevel-{args.job_name}",
             config={k: v for k, v in vars(args).items()
                     if k not in {"job_name"}},
+            resume=True,
+            id="do7s4i4c"
         )
 
     # ── frame stacks — one per env ────────────────────────────────────────────
