@@ -127,7 +127,7 @@ class Brain():
                 "policy" : self.policy.state_dict(),
                 "test" : self.test.state_dict(),
                 "optimizer" : self.optimiser.state_dict()
-            }, f"{path}/Checkpoints/brain{episode}.pth"
+            }, f"runs/{path}/Checkpoints/brain{episode}.pth"
         )
     def save(self, path):
         """

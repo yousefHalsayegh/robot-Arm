@@ -108,9 +108,7 @@ def training(args, env, simulation_app):
             project="RL for Games",
             name=f"LowLevel-{args.job_name}",
             config={k: v for k, v in vars(args).items()
-                    if k not in {"job_name"}},
-            resume=True,
-            id="do7s4i4c"
+                    if k not in {"job_name"}}
         )
 
     # ── frame stacks — one per env ────────────────────────────────────────────

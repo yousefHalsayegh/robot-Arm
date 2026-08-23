@@ -18,6 +18,26 @@ import pygame
 
 gym.register_envs(ale_py)
 
+def predict(ale_env_wrapped, c_frames, c_action, T):
+    # get inner ALE for state save/restore
+    inner = ale_env_wrapped
+    while hasattr(inner, 'env'):
+        inner = inner.env
+    
+    saved = inner.ale.cloneState()
+    predict_frame = list(c_frames)
+
+    for _ in range(T):
+        obs, _, term, trunc, _ = ale_env_wrapped.step(c_action)
+        if term or trunc:
+            break
+        # obs is [4, 84, 84] from FrameStackObservation — take last frame
+        predict_frame.pop(0)
+        predict_frame.append(obs[-1])
+
+    inner.ale.restoreState(saved)
+    return np.stack(predict_frame, axis=0)
+
 
 def format_time(seconds):
     """
@@ -52,9 +72,6 @@ def training(args):
     Runs the RL agent in training mode
     """
 
-    #make the code slower as if it is being rendered 
-    slow = config.SLOW if args.human_speed else 0 
-
     #inital the environemt
     env = gym.vector.SyncVectorEnv([env_init(42, i) for i in range(args.environment)])
     brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, args.eps_start, args.eps_decay, args.capacity)
@@ -62,22 +79,23 @@ def training(args):
     episode_time = []
 
     #create or call a certain checkpoint
-    if os.path.exists(f"{args.job_name}/Checkpoints/brain{args.checkpoint}"):
+    if os.path.exists(f"runs/RL Agent-{args.job_name}/Checkpoints/brain{args.checkpoint}"):
         steps, start = brain.load_checkpoint()
         print("loading... brain", args.checkpoint )
     else:
-        if not os.path.exists(f"{args.job_name}/"):
-            os.mkdir(f"{args.job_name}/")
-            os.mkdir(f"{args.job_name}/Checkpoints/")
+        if not os.path.exists(f"runs/RL Agent-{args.job_name}/"):
+            os.mkdir(f"runs/RL Agent-{args.job_name}/")
+            os.mkdir(f"runs/RL Agent-{args.job_name}/Checkpoints/")
         steps, start = 0, 0 
     arg_name = f"RL Agent-{vars(args).pop("job_name")}"
 
     #starting logining in wandb
-    wandb.init(
-        project="RL for Games",
-        name=arg_name,
-        config= args
-    )
+    if args.wandb:
+        wandb.init(
+            project="RL for Games",
+            name=arg_name,
+            config= args
+        )
     #The main part 
     try:
         episode = start
@@ -98,13 +116,20 @@ def training(args):
             #runing as long as the episode count
             while episode < (args.episode +1):
                 #tracks the overall time of a step
-                lap = time.time()
 
                 #checks which env passed the execution limit
-                ready = np.ones(args.environment, dtype=bool) if not args.human_speed else action_lap >= args.execution
+                ready = action_lap >= args.action_delay
 
                 #predicting the next action and tracking overall the action metrics
-                action = brain.predict_next_action(state,steps, env)
+                if args.predict:
+                    lookahead_state = np.stack([
+                        predict(env.envs[i], state[i], prev_action[i], args.action_delay)
+                        for i in range(args.environment)
+                    ])
+                    action = brain.predict_next_action(lookahead_state, steps, env)
+                else:
+                    action = brain.predict_next_action(state, steps, env)
+
                 current_actions = np.where(ready, action, prev_action)
                 for i in range(args.environment):
                     if ready[i] and prev_action[i] != current_actions[i]:
@@ -116,6 +141,7 @@ def training(args):
                             actions[i]['neutral'] += 1
                         actions[i]["all"] += 1
                 prev_action = current_actions.copy()
+                action_lap = np.where(ready, 1, action_lap + 1)
 
                 #move the environemtn forward and extracting necesary info 
                 obs, raw_reward, terminated, truncated, _ = env.step(current_actions)
@@ -139,12 +165,12 @@ def training(args):
 
                             #if clipping is used then only inc/dec by 1 if not then calculate the reward with scaling
                             if new_distance < prev_distance:
-                                reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
-                                tracking_reward[i] += 1 if args.clip_reward else config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                reward[i] += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                tracking_reward[i] +=  config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
 
                             elif new_distance > config.THRESHOLD * config.CROP and new_distance >= prev_distance:
-                                reward[i] -= 1 if args.clip_reward else config.DISTANCE_REWARD * config.PENALTIY_MOVE
-                                tracking_reward[i] -= 1 if args.clip_reward else config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                                reward[i] -=  config.DISTANCE_REWARD * config.PENALTIY_MOVE
+                                tracking_reward[i] -= config.DISTANCE_REWARD * config.PENALTIY_MOVE
 
                         prev_paddle_y[i] = new_paddle_y
 
@@ -153,7 +179,7 @@ def training(args):
                 
                 #populate the buffer
                 for i in range(args.environment):
-                    brain.buffer.push(state[i], current_actions[i], clipped[i], next_state[i], float(done[i]))
+                    brain.buffer.push(state[i], current_actions[i], clipped[i], next_state[i], float(done[i]), steps)
 
                 #tracking info
                 total_reward += clipped
@@ -164,14 +190,15 @@ def training(args):
                     loss, grad_norm = brain.train()
 
                 #logging the steps info
-                wandb.log({
-                    "train/loss":          loss,
-                    "train/grad_norm":     grad_norm,
-                    "train/epsilon":       brain.eps,
-                    "train/buffer_size":   len(brain.buffer),
-                    "train/episode":         episode,
-                    "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
-                }, step=steps)
+                if args.wandb:
+                    wandb.log({
+                        "train/loss":          loss,
+                        "train/grad_norm":     grad_norm,
+                        "train/epsilon":       brain.eps,
+                        "train/buffer_size":   len(brain.buffer),
+                        "train/episode":         episode,
+                        "train/learning_rate": brain.optimiser.param_groups[0]["lr"],
+                    }, step=steps)
 
                 #after the episode being done, and calculating the necessary metrics
                 for i in np.where(done)[0]:
@@ -180,7 +207,7 @@ def training(args):
                     eta = np.mean(episode_time[-100:]) * (args.episode - episode - 1)
 
                     #saving when necessary
-                    if episode % args.mid_save == 0 and episode != 0: 
+                    if episode % args.mid_save == 0: 
                         brain.save_checkpoint(episode, steps,arg_name)
                     if episode % args.full_save == 0 and episode != 0: 
                         brain.save()
@@ -201,16 +228,17 @@ def training(args):
                     pbar.update(1)
 
                     #updating the episode level metrics
-                    wandb.log({
-                        "episode/total_reward": total_reward[i],
-                        "episode/goal_reward": goal_reward[i],
-                        "episode/tracking_reward": tracking_reward[i],
-                        "episode/clipped_reward": clipped[i],
-                        "episode/action_all": actions[i]["all"],
-                        "episode/actions_up": actions[i]["up"],
-                        "episode/actions_down": actions[i]["down"],
-                        "episode/actions_neutral": actions[i]["neutral"],
-                    }, step=episode)
+                    if args.wandb:
+                        wandb.log({
+                            "episode/total_reward": total_reward[i],
+                            "episode/goal_reward": goal_reward[i],
+                            "episode/tracking_reward": tracking_reward[i],
+                            "episode/clipped_reward": clipped[i],
+                            "episode/action_all": actions[i]["all"],
+                            "episode/actions_up": actions[i]["up"],
+                            "episode/actions_down": actions[i]["down"],
+                            "episode/actions_neutral": actions[i]["neutral"],
+                        }, step=steps)
 
                     #restarting
                     total_reward[i] = 0
@@ -224,19 +252,15 @@ def training(args):
                     episode += 1
                 state = next_state
 
-                #in case slow mode is used pushing for a buffer
-                overall = max(0, slow- (time.time() - lap))
-                time.sleep(overall)
-                action_lap += overall
-
-                action_lap[ready] = 0.0
 
     except Exception as e:
+
         #helps in logging any crashs
         print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
         print(f"[CRASH] Episode: {episode} | Steps: {steps}", flush=True)
         env.close()
-        wandb.finish(exit_code=1)
+        if args.wandb:
+            wandb.finish(exit_code=1)
         raise
 
     except KeyboardInterrupt:
@@ -309,7 +333,6 @@ def main():
     parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
     parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
     parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
-    parser.add_argument("-ex", "--execution", help="The speed of the robot arm", type=float, default=config.EXECUTION)
     parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
     parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
     parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
@@ -326,12 +349,14 @@ def main():
     parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
     parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
     parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-hs", "--human_speed", help="A checkpoint for the RL", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-test", "--testing", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)
-    
+    parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)    
+    parser.add_argument("-ad", "--action_delay", help="Number of env steps to hold an action before selecting the next one (simulates robot arm actuation delay)", type=int, default=0)
+    parser.add_argument("-w",   "--wandb",         default=True,
+                    action=argparse.BooleanOptionalAction)
+    parser.add_argument("-p",   "--predict",         default=True,
+                        action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     if args.training:
