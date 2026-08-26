@@ -22,6 +22,28 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+def reset_or_restore_on_failure(env, env_ids):
+    buf = _ensure_displacement_buffer(env)
+    buf[env_ids] = 0.0
+
+    succeeded = env.termination_manager.get_term("success")[env_ids]
+    failed_ids = env_ids[~succeeded]
+    succeeded_ids = env_ids[succeeded]
+
+    if len(failed_ids) > 0:
+        robot = env.scene["robot"]
+        obj = env.scene["object"]
+        target_arm = env._safe_arm_joint_pos[failed_ids]
+        robot.write_joint_state_to_sim(target_arm, torch.zeros_like(target_arm), env_ids=failed_ids)
+        obj.write_root_pose_to_sim(env._safe_joystick_pose[failed_ids], env_ids=failed_ids)
+
+    if len(succeeded_ids) > 0:
+        env._safe_arm_joint_pos[succeeded_ids] = env.scene["robot"].data.joint_pos[succeeded_ids].clone()
+        obj = env.scene["object"]
+        env._safe_joystick_pose[succeeded_ids] = torch.cat(
+            [obj.data.root_pos_w[succeeded_ids], obj.data.root_quat_w[succeeded_ids]], dim=-1
+        )
+
 def _ensure_displacement_buffer(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Lazily create the per-env joystick-displacement tracker."""
     if not hasattr(env, "_joystick_max_displacement"):

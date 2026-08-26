@@ -175,7 +175,8 @@ def training(args):
                         prev_paddle_y[i] = new_paddle_y
 
                 #clipped the reward if stated 
-                clipped = np.clip(reward, -1, 1) if args.clip_reward else reward
+                clipped = np.clip(reward, -5, 5) if args.clip_reward else reward
+
                 
                 #populate the buffer
                 for i in range(args.environment):
@@ -209,8 +210,6 @@ def training(args):
                     #saving when necessary
                     if episode % args.mid_save == 0: 
                         brain.save_checkpoint(episode, steps,arg_name)
-                    if episode % args.full_save == 0 and episode != 0: 
-                        brain.save()
 
                     #updating the progress bar
                     pbar.set_postfix({
@@ -251,6 +250,7 @@ def training(args):
                     ep[i] = time.time()
                     episode += 1
                 state = next_state
+        brain.save(arg_name)
 
 
     except Exception as e:
@@ -261,12 +261,14 @@ def training(args):
         env.close()
         if args.wandb:
             wandb.finish(exit_code=1)
+        brain.save(arg_name)
         raise
 
     except KeyboardInterrupt:
         print("\nclosing...")
         env.close()
         wandb.finish()
+        brain.save(arg_name)
 
 def eval(args):
     """

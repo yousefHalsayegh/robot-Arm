@@ -45,7 +45,7 @@ import gymnasium as gym
 import sim.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 from sim.utils.robo_brain import Brain
-
+from sim.utils.robot_sim import ARRIVAL_THRESHOLD, POSITIONS
 from sim.tasks.joystick.mdp.observations import (
     Frames, update_frame_stack
 )
@@ -68,6 +68,41 @@ CMD_NAMES = {
 
 
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+
+def initialize_and_snapshot_home(base_env, device, simulation_app, n_steps=200, arrival_threshold=None):
+
+    robot = base_env.scene["robot"]
+    N = base_env.num_envs
+    tol = arrival_threshold if arrival_threshold is not None else ARRIVAL_THRESHOLD
+    target_t = torch.tensor(POSITIONS["home"], dtype=torch.float32, device=device).unsqueeze(0).repeat(N, 1)
+    confirmed = torch.zeros(N, dtype=torch.int32, device=device)
+
+    for _ in range(n_steps):
+        robot.set_joint_position_target(target_t)
+        robot.write_data_to_sim()
+        base_env.sim.step()
+        base_env.scene.update(base_env.sim.get_physics_dt())
+        simulation_app.update()
+
+        max_error = torch.abs(robot.data.joint_pos - target_t).max(dim=1).values
+        confirmed = torch.where(max_error < tol, confirmed + 1, torch.zeros_like(confirmed))
+        if (confirmed >= 5).all():
+            break
+
+    still_over = torch.abs(robot.data.joint_pos - target_t).max(dim=1).values >= tol
+    if still_over.any():
+        print(f"WARNING: envs not confirmed at home before training start: {still_over.nonzero().flatten().tolist()}")
+
+    for _ in range(80):
+        base_env.sim.step()
+        base_env.scene.update(base_env.sim.get_physics_dt())
+        simulation_app.update()
+
+    base_env._safe_arm_joint_pos = robot.data.joint_pos.clone()
+    obj = base_env.scene["object"]
+    base_env._safe_joystick_pose = torch.cat(
+        [obj.data.root_pos_w.clone(), obj.data.root_quat_w.clone()], dim=-1
+    )
 
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -183,7 +218,9 @@ def training(args, env, simulation_app):
     critic_loss, actor_loss = 0.0, 0.0
 
     # ── initial reset ─────────────────────────────────────────────────────────
+    initialize_and_snapshot_home(base_env, device, simulation_app)
     obs, _ = env.reset()
+
 
     update_frame_stack(base_env, frame_stacks, reset_ids=list(range(N)))
     
@@ -416,6 +453,8 @@ def training(args, env, simulation_app):
         )
 
     except Exception as e:
+        env.close()
+        simulation_app.close()
         import traceback
         crash = traceback.format_exc()
         print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)

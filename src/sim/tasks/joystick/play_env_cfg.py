@@ -55,7 +55,7 @@ CMD_DOWN    = 3
 CMD_LEFT    = 4
 CMD_RIGHT   = 5
 CMD_HOME    = 1
-ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME]
+ALL_COMMANDS = [CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT]
 ##
 # Scene definition
 ##
@@ -191,62 +191,7 @@ def update_episode_length(env, stage: int):
  
  
 # ── event term — controller position randomisation ────────────────────────────
- 
-def randomise_controller_pose(
-    env,
-    env_ids:    torch.Tensor,
-    pos_range:  float = 0.0,
-    rot_range:  float = 0.0,
-):
-    """
-    Resets the arcade stick to its default pose (relative to each env's origin)
-    with a random offset.
-    Range parameters are updated by the curriculum manager.
 
-    Default pose from InitialStateCfg:
-        pos = [0.3, -0.052, 0.0]
-        rot = [0.7071068, 0.0, 0.0, -0.7071068]  (w, x, y, z)
-    """
-
-    object_art = env.scene["object"]
-    device     = env.device
-    N          = len(env_ids)
-
-    # default pose — local offset relative to each env's own origin
-    default_pos = torch.tensor(
-        STICK_DEFAULT_POS, dtype=torch.float32, device=device
-    ).unsqueeze(0).repeat(N, 1)
-
-    default_rot = torch.tensor(
-        STICK_DEFAULT_ROT, dtype=torch.float32, device=device
-    ).unsqueeze(0).repeat(N, 1)
-
-    if pos_range > 0.0:
-        # uniform offset in XY plane only — Z kept fixed
-        offset_xy = (torch.rand(N, 2, device=device) * 2 - 1) * pos_range
-        offset    = torch.zeros(N, 3, device=device)
-        offset[:, :2] = offset_xy
-        default_pos   = default_pos + offset
-
-    if rot_range > 0.0:
-        # yaw-only rotation offset around vertical axis
-        yaw_offset = (torch.rand(N, device=device) * 2 - 1) * rot_range
-        cos_h = torch.cos(yaw_offset / 2)
-        sin_h = torch.sin(yaw_offset / 2)
-        yaw_quat = torch.stack(
-            [cos_h, torch.zeros_like(cos_h),
-             torch.zeros_like(cos_h), sin_h], dim=1
-        )
-        default_rot = quat_mul(default_rot, yaw_quat)
-
-    # add each env's own world-space origin — this was the missing piece
-    env_origins = env.scene.env_origins[env_ids]   # [N, 3]
-    world_pos   = default_pos + env_origins
-
-    object_art.write_root_pose_to_sim(
-        torch.cat([world_pos, default_rot], dim=1),
-        env_ids=env_ids,
-    )
 
 @configclass
 class ObjectTableSceneCfg(InteractiveSceneCfg):
@@ -391,18 +336,8 @@ class RecordCfg(RecorderManagerBaseCfg):
 
 @configclass
 class EventCfg:
-        reset_controller = EventTerm(
-            func=randomise_controller_pose,
-            mode="reset",
-            params={
-                "pos_range": 0.0,   # Stage 0: fixed position
-                "rot_range": 0.0,
-            },
-        )
-        reset_displacement_tracker = EventTerm(     
-            func=mdp.reset_displacement_tracker,
-            mode="reset",
-        )
+
+    reset_or_restore = EventTerm(func=mdp.reset_or_restore_on_failure, mode="reset")
 
 @configclass
 class PlayEnvCfg(ManagerBasedRLEnvCfg):

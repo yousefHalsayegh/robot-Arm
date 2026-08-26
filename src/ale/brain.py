@@ -105,16 +105,18 @@ class Brain():
         """
         Calculate the next action, given the current state, and epsilon
         """
-        self.eps = self.eps_end+ (self.eps_start - self.eps_end) * max(0, (self.eps_decay - steps) / self.eps_decay)
+        self.eps = self.eps_end + (self.eps_start - self.eps_end) * max(0, (self.eps_decay - steps) / self.eps_decay)
 
-        #epsilon is used to add some randomnes to the enviroment, if epsilon is big it is more likely that the env choose a random action, otherwise it is computed by the network
-        if random() < self.eps:
-            sample = env.action_space.sample()
-            return int(sample[0]) if hasattr(sample, '__len__') else int(sample)
+        num_envs = state.shape[0]
 
         with torch.no_grad():
-            state_t = torch.FloatTensor(state).unsqueeze(0).to("cuda")
-            return self.policy(state_t).argmax(dim=1).item()
+            state_t = torch.FloatTensor(state).to("cuda")
+            greedy_action = self.policy(state_t).argmax(dim=1).cpu().numpy()
+
+        random_mask = np.random.random(num_envs) < self.eps
+        random_actions = env.action_space.sample()
+
+        return np.where(random_mask, random_actions, greedy_action)
         
     def save_checkpoint(self, episode, steps, path="checkpoint"):
         """
@@ -133,7 +135,7 @@ class Brain():
         """
         Save the final training step for furtherr eval 
         """
-        torch.save(self.policy.state_dict(), f"{path}/brain.pth")
+        torch.save(self.policy.state_dict(), f"runs/{path}/Checkpoints/brain.pth")
 
     def load_checkpoint(self,path):
         """
