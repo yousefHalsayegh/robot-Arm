@@ -46,17 +46,16 @@ class Brain():
        """
        Training the policy netwrok, given the collected observations
        """
-
         #The warmup to allow the buffer to collect data before training starts
        if len(self.buffer) < self.warmup:
            return 0, 0
     
         #sampling different observations from the collected data
        batch, indices, weights = self.buffer.sample(self.batch)
-       states = torch.FloatTensor(np.array([t.state      for t in batch])).to("cuda")
+       states = torch.FloatTensor(np.array([t.state.astype(np.float32) / 255.0      for t in batch])).to("cuda")
        actions = torch.LongTensor(np.array([t.action      for t in batch])).to("cuda")
        rewards = torch.FloatTensor(np.array([t.reward      for t in batch])).to("cuda")
-       next_states = torch.FloatTensor(np.array([t.next_state      for t in batch])).to("cuda")
+       next_states = torch.FloatTensor(np.array([t.next_state.astype(np.float32) / 255.0      for t in batch])).to("cuda")
        dones = torch.FloatTensor(np.array([t.done      for t in batch])).to("cuda")
        steps = torch.FloatTensor(np.array([t.n      for t in batch])).to("cuda")
        
@@ -217,6 +216,9 @@ class Brain():
             except ValueError:
                 print("Please enter a number")
                 continue
+
+            
+
 
 
 class Network(nn.Module):

@@ -4,9 +4,34 @@ import sys
 import time
 import wandb
 import os
-
-
+import signal
 import yaml
+
+import psutil
+
+def kill_process_tree(pid, timeout=3):
+    """Kill a process and all of its descendants, regardless of whether
+    they've detached into their own session/process group."""
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+
+    children = parent.children(recursive=True)
+    procs = children + [parent]
+
+    for p in procs:
+        try:
+            p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+
+    gone, alive = psutil.wait_procs(procs, timeout=timeout)
+    for p in alive:
+        try:
+            p.kill()   # SIGKILL anything that ignored terminate()
+        except psutil.NoSuchProcess:
+            pass
 
 def main(args):
     os.makedirs(args.logdir, exist_ok=True)
@@ -23,30 +48,31 @@ def main(args):
     full_sweep_path = f"{args.entity}/{args.project}/{sweep_id}" if args.entity else f"{args.project}/{sweep_id}"
 
     processes = []
-    for i in range(args.agents):
-        log_path = os.path.join(args.logdir, f"agent_{i}.log")
-        log_file = open(log_path, "w")
-        cmd = ["wandb", "agent", full_sweep_path]
-        print(f"Launching agent {i} -> {log_path}")
-        p = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT)
-        processes.append((p, log_file))
-        time.sleep(2)  # stagger startup so CUDA context init / initial buffer alloc doesn't spike all at once
-
-    print(f"\n{args.agents} agents running against sweep {full_sweep_path}")
-    print("Press Ctrl+C to stop all agents.\n")
-
     try:
+        for i in range(args.agents):
+            log_path = os.path.join(args.logdir, f"agent_{i}.log")
+            log_file = open(log_path, "w")
+            cmd = ["wandb", "agent", full_sweep_path]
+            print(f"Launching agent {i} -> {log_path}")
+            p = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+            processes.append((p, log_file))
+            time.sleep(2)
+
+        print(f"\n{args.agents} agents running against sweep {full_sweep_path}")
+        print("Press Ctrl+C to stop all agents.\n")
+
         while True:
             time.sleep(10)
             alive = [p for p, _ in processes if p.poll() is None]
             if not alive:
                 print("All agents finished.")
                 break
+
     except KeyboardInterrupt:
         print("\nStopping all agents...")
         for p, log_file in processes:
             if p.poll() is None:
-                p.terminate()
+                kill_process_tree(p.pid)
             log_file.close()
         for p, _ in processes:
             p.wait()

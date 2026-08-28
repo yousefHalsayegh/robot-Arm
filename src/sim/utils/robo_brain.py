@@ -19,7 +19,7 @@ LOG_STD_MAX  = 2
 
 class Brain:
     
-    def __init__(self,ce=256, je=64,act=5, lr=config.LEARNING_RATE, wp=config.WARMUP, b=config.BATCH, g=config.GAMMA, tau=config.TAU,c=config.CAPACITY):
+    def __init__(self,ce=256, je=64, lr=config.LEARNING_RATE, wp=config.WARMUP, b=config.BATCH, g=config.GAMMA, tau=config.TAU,c=config.CAPACITY):
         
         self.warmup  = wp
         self.batch   = b
@@ -64,9 +64,9 @@ class Brain:
 
         self.buffer       = ReplayBuffer(c)
         self.reward = RunningNormaliser()
-        self.success_count = 0
-        self.min_successes_before_decay = 10  
-        self.alpha_floor = 0.01
+        # self.success_count = 0
+        # self.min_successes_before_decay = 10  
+        # self.alpha_floor = 0.01
 
 
 
@@ -181,11 +181,7 @@ class Brain:
         self.alpha_optimiser.zero_grad()
         alpha_loss.backward()
         self.alpha_optimiser.step()
-        if self.success_count < self.min_successes_before_decay:
-            
-            with torch.no_grad():
-                self.log_alpha.clamp_(min=np.log(self.alpha_floor))
-
+        
         # soft update
         self._soft_update(self.encoder,   self.target_encoder)
         self._soft_update(self.joint_mlp, self.target_joint_mlp)

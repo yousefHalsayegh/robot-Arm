@@ -11,7 +11,7 @@ parser.add_argument("-ep",  "--episodes",      type=int,   default=10000)
 parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
 parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
 parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
-parser.add_argument("-c", "--capacity",    type=int)
+parser.add_argument("-c", "--capacity",    type=int, default=10000)
 parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
@@ -69,6 +69,16 @@ CMD_NAMES = {
 
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 
+def profile_train_memory(brain, batch_sizes_to_test=[16, 32, 64, 128, 256]):
+    for bs in batch_sizes_to_test:
+        if len(brain.buffer) < bs:
+            continue
+        torch.cuda.reset_peak_memory_stats()
+        brain.batch = bs
+        brain.train()
+        peak_mb = torch.cuda.max_memory_allocated() / 1e6
+        print(f"batch_size={bs}: peak GPU memory = {peak_mb:.1f} MB")
+
 def initialize_and_snapshot_home(base_env, device, simulation_app, n_steps=200, arrival_threshold=None):
 
     robot = base_env.scene["robot"]
@@ -124,6 +134,7 @@ def training(args, env, simulation_app):
         je = args.joint_embedding,
         c=args.capacity
     )
+    
 
     steps, start_ep = 0, 0
     ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
@@ -199,7 +210,7 @@ def training(args, env, simulation_app):
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
     command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS}
-    
+
     current_stage = 0
 
     # ── per-env tracking ──────────────────────────────────────────────────────

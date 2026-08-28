@@ -54,7 +54,7 @@ def build_parser():
     parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
     parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
     parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
-    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
+    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=int, default=config.CAPACITY)
     parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
     parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
@@ -155,11 +155,12 @@ def training(args):
             os.mkdir(f"runs/RL Agent-{args.job_name}/")
             os.mkdir(f"runs/RL Agent-{args.job_name}/Checkpoints/")
         steps, start = 0, 0 
-    arg_name = f"RL Agent-{vars(args).pop("job_name")}"
+    arg_name = f"RL Agent-{vars(args).pop('job_name')}"
+
 
     #starting logining in wandb
     if args.wandb and wandb.run is None:
-        wandb.init(project="RL for Games", name=arg_name, config=args)
+        wandb.init(project="RL for Games", name="arg_name", config=args)
     #The main part 
     try:
         episode = start
@@ -247,7 +248,7 @@ def training(args):
                     result = nstep.push(i, state[i], current_actions[i], clipped[i], next_state[i], bool(done[i]))
                     if result is not None:
                         s, a, R, ns, d, n = result
-                        brain.buffer.push(s, a, R, ns, d, n)
+                        brain.buffer.push((s * 255).round().astype(np.uint8), a, R, (ns * 255).round().astype(np.uint8), d, n)
                 #tracking info
                 total_reward += clipped
                 steps += args.environment
@@ -408,7 +409,8 @@ def eval(args):
 
 def main():
 
-    args = build_parser.parse_args()
+    args = build_parser().parse_args()
+    print(args)
 
     if args.training:
         training(args)
