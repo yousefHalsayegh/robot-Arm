@@ -15,15 +15,15 @@ class Brain():
     The class used for the RL agent
     """
     #TODO change the parameters so that it takes from the config rather than this way
-    def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0):
+    def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0, d=False, tu="soft", tup=8000, n=False):
         
         #initializing the policy network
-        self.policy = Network().to("cuda")
-        self.optimiser = optim.Adam(self.policy.parameters(), lr=lr)
-        self.loss_fn = nn.MSELoss()
+        self.policy = Network(dueling=d, noisy=n).to("cuda")
+        self.optimiser = optim.Adam(self.policy.parameters(), lr=lr, eps=1.5e-4)
+        self.loss_fn = nn.SmoothL1Loss(reduction='none')
 
         #initializing the test network
-        self.test = Network().to("cuda")
+        self.test = Network(dueling=d, noisy=n).to("cuda")
         self.test.eval()
 
         #parameters and the replay buffer
@@ -37,6 +37,9 @@ class Brain():
         self.eps_start = es
         self.eps_decay = ed
         self.q_value = 0
+        self.target_update = tu           # "soft" or "hard"
+        self.target_update_period = tup
+        self.train_steps = 0
 
         self.agent = ""
     def train(self):
@@ -69,21 +72,27 @@ class Brain():
         
 
         #calculating the loss and passing it backward
-       loss = (weights * self.loss_fn(q_values, targets)).mean()
+       per_sample_loss = self.loss_fn(q_values, targets)
+       loss = (weights * per_sample_loss).mean()
        td_errors = (targets - q_values).detach().cpu().numpy()
        self.optimiser.zero_grad()
        loss.backward()
+       grad_norm = sum(
+               p.grad.norm().item() ** 2
+               for p in self.policy.parameters()
+               if p.grad is not None
+               ) ** 0.5
        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
        self.optimiser.step()
-       self.soft_update()
+       self.train_steps += 1
+       if self.target_update == "soft":
+            self.soft_update()
+       elif self.train_steps % self.target_update_period == 0:
+            self.hard_update()
        self.buffer.update_priorities(indices, td_errors)
 
         #calculating the grad_norm for measuring the overall performace 
-       grad_norm = sum(
-        p.grad.norm().item() ** 2
-        for p in self.policy.parameters()
-        if p.grad is not None
-        ) ** 0.5
+       
 
 
        return loss.item(), grad_norm
@@ -100,6 +109,8 @@ class Brain():
                 self.tau * policy_param.data + 
                 (1.0 - self.tau) * target_param.data
             )
+    def hard_update(self):
+        self.test.load_state_dict(self.policy.state_dict())
 
     def predict_next_action(self, state, steps, env):
         """
@@ -209,34 +220,29 @@ class Brain():
 
 
 class Network(nn.Module):
-    """
-    The CNN used in the training
-    """
-    #TODO add the blocks methods so I can test out which structure is the best 
-    # Initialise
-    def __init__(self, n_actions=6):
-        super(Network, self).__init__()
-        
+    def __init__(self, n_actions=6, dueling=False, noisy=False):
+        super().__init__()
+        self.dueling = dueling
+        Linear = NoisyLinear if noisy else nn.Linear
         self.conv = nn.Sequential(
-            nn.Conv2d(4, 32, 8, 4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 4, 2),
-            nn.ReLU(),
-            nn.Conv2d(64,64,3,1),
-            nn.ReLU()
+            nn.Conv2d(4, 32, 8, 4), nn.ReLU(),
+            nn.Conv2d(32, 64, 4, 2), nn.ReLU(),
+            nn.Conv2d(64, 64, 3, 1), nn.ReLU(),
+            nn.Flatten()
         )
+        conv_out = 64 * 7 * 7
+        if dueling:
+            self.value = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, 1))
+            self.advantage = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions))
+        else:
+            self.fc = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions))
 
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64*7*7, 512),
-            nn.ReLU(),
-            nn.Linear(512, n_actions)
-        )
-
-    # Forward pass
-    def forward(self, input):
-
-        return self.fc(self.conv(input))
+    def forward(self, x):
+        feats = self.conv(x)
+        if self.dueling:
+            v, a = self.value(feats), self.advantage(feats)
+            return v + (a - a.mean(dim=1, keepdim=True))
+        return self.fc(feats)
     
 class ReplayBuffer:
 
@@ -285,4 +291,20 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
-    
+
+class NoisyLinear(nn.Module):
+    def __init__(self, in_f, out_f, sigma_init=0.5):
+        super().__init__()
+        bound = 1 / in_f ** 0.5
+        self.weight_mu = nn.Parameter(torch.empty(out_f, in_f).uniform_(-bound, bound))
+        self.weight_sigma = nn.Parameter(torch.full((out_f, in_f), sigma_init / in_f ** 0.5))
+        self.bias_mu = nn.Parameter(torch.empty(out_f).uniform_(-bound, bound))
+        self.bias_sigma = nn.Parameter(torch.full((out_f,), sigma_init / out_f ** 0.5))
+
+    def forward(self, x):
+        if self.training:
+            weight = self.weight_mu + self.weight_sigma * torch.randn_like(self.weight_mu)
+            bias = self.bias_mu + self.bias_sigma * torch.randn_like(self.bias_mu)
+        else:
+            weight, bias = self.weight_mu, self.bias_mu
+        return nn.functional.linear(x, weight, bias)

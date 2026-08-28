@@ -1,0 +1,156 @@
+program: sweep_train.py
+method: grid
+metric:
+  name: episode/total_reward
+  goal: maximize
+parameters:
+  combo:
+    values:
+    - run_group: baseline_sparse
+      full_rewards: false
+      action_delay: 0
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: baseline_full
+      full_rewards: true
+      action_delay: 0
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d5_full_hard_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d5_full_hard_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d5_full_soft_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d5_full_soft_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d5_no_dueling_hard_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d5_no_dueling_hard_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d5_no_dueling_soft_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d5_no_dueling_soft_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d5_no_noisy_hard_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d5_no_noisy_hard_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d5_no_noisy_soft_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d5_no_noisy_soft_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d5_nstep1_hard_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d5_nstep1_hard_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d5_nstep1_soft_noPred
+      full_rewards: false
+      action_delay: 5
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d5_nstep1_soft_pred
+      full_rewards: false
+      action_delay: 5
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
+  environment:
+    value: 4
+  episode:
+    value: 5000

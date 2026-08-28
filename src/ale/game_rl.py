@@ -15,8 +15,66 @@ import wandb
 from tqdm import tqdm
 from random import random
 import pygame
+from collections import deque
+import torch
 
+class NStepBuffer:
+    def __init__(self, n, gamma, num_envs):
+        self.n, self.gamma = n, gamma
+        self.window = [deque(maxlen=n) for _ in range(num_envs)]
+
+    def push(self, i, state, action, reward, next_state, done):
+        self.window[i].append((state, action, reward, next_state, done))
+        result = None
+        if len(self.window[i]) == self.n:
+            R = sum((self.gamma ** k) * t[2] for k, t in enumerate(self.window[i]))
+            s0, a0 = self.window[i][0][0], self.window[i][0][1]
+            result = (s0, a0, R, next_state, done, self.n)
+        if done:
+            self.window[i].clear()   # start fresh next episode; partial windows are discarded
+        return result
+    
 gym.register_envs(ale_py)
+
+def build_parser():
+    #The argumaents provided in the code
+    parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
+    parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
+    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
+    parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
+    parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
+    parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
+    parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
+    parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
+    parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
+    parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
+    parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
+    parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
+    parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
+    parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
+    parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
+    parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
+    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
+    parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
+    parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)    
+    parser.add_argument("-ad", "--action_delay", help="Number of env steps to hold an action before selecting the next one (simulates robot arm actuation delay)", type=int, default=0)
+    parser.add_argument("-w",   "--wandb",         default=True,
+                    action=argparse.BooleanOptionalAction)
+    parser.add_argument("-p",   "--predict",         default=True,
+                        action=argparse.BooleanOptionalAction)
+    parser.add_argument("-du", "--dueling", default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-no", "--noisy", default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-ns", "--nstep", type=int, default=1)
+    parser.add_argument("-tu", "--target_update", choices=["soft", "hard"], default="soft")
+    parser.add_argument("-tup", "--target_update_period", type=int, default=8000)
+    parser.add_argument("-dr", "--dry_run", type=int, default=0,
+        help="If >0, run this many training iterations then print memory usage and exit")
+    parser.add_argument("--run_group", type=str, default="ungrouped",
+    help="Label for this combo, used for filtering/grouping in wandb — not used by training logic itself")
+    return parser
 
 def predict(ale_env_wrapped, c_frames, c_action, T):
     # get inner ALE for state save/restore
@@ -71,12 +129,22 @@ def training(args):
     """
     Runs the RL agent in training mode
     """
+    if args.predict and args.action_delay == 0:
+        print("[warn] --predict has no effect with --action_delay 0; disabling.")
+        args.predict = False
 
     #inital the environemt
     env = gym.vector.SyncVectorEnv([env_init(42, i) for i in range(args.environment)])
-    brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, args.eps_start, args.eps_decay, args.capacity)
+    brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, 
+                  args.eps_start, args.eps_decay, args.capacity, args.dueling, args.target_update, 
+                  args.target_update_period, args.noisy)
+
+    if args.dry_run:
+        torch.cuda.reset_peak_memory_stats()
+
     steps = 0
     episode_time = []
+    nstep = NStepBuffer(n=args.nstep, gamma=args.gamma, num_envs=args.environment)
 
     #create or call a certain checkpoint
     if os.path.exists(f"runs/RL Agent-{args.job_name}/Checkpoints/brain{args.checkpoint}"):
@@ -90,12 +158,8 @@ def training(args):
     arg_name = f"RL Agent-{vars(args).pop("job_name")}"
 
     #starting logining in wandb
-    if args.wandb:
-        wandb.init(
-            project="RL for Games",
-            name=arg_name,
-            config= args
-        )
+    if args.wandb and wandb.run is None:
+        wandb.init(project="RL for Games", name=arg_name, config=args)
     #The main part 
     try:
         episode = start
@@ -175,13 +239,15 @@ def training(args):
                         prev_paddle_y[i] = new_paddle_y
 
                 #clipped the reward if stated 
-                clipped = np.clip(reward, -5, 5) if args.clip_reward else reward
+                clipped = np.clip(reward, -1, 1) if args.clip_reward else reward
 
                 
                 #populate the buffer
                 for i in range(args.environment):
-                    brain.buffer.push(state[i], current_actions[i], clipped[i], next_state[i], float(done[i]), steps)
-
+                    result = nstep.push(i, state[i], current_actions[i], clipped[i], next_state[i], bool(done[i]))
+                    if result is not None:
+                        s, a, R, ns, d, n = result
+                        brain.buffer.push(s, a, R, ns, d, n)
                 #tracking info
                 total_reward += clipped
                 steps += args.environment
@@ -189,6 +255,17 @@ def training(args):
                 #passing the training depending on the updates called
                 for _ in range(args.updates):
                     loss, grad_norm = brain.train()
+                if args.dry_run and steps >= args.dry_run:
+                    import psutil
+                    proc = psutil.Process()
+                    gpu_peak = torch.cuda.max_memory_allocated() / 1e6
+                    gpu_reserved = torch.cuda.max_memory_reserved() / 1e6
+                    cpu_rss = proc.memory_info().rss / 1e6
+                    print(f"[DRY RUN] after {steps} steps — GPU allocated: {gpu_peak:.0f}MB, "
+                        f"GPU reserved: {gpu_reserved:.0f}MB, CPU RSS: {cpu_rss:.0f}MB")
+                    env.close()
+                    if args.wandb: wandb.finish()
+                    return
 
                 #logging the steps info
                 if args.wandb:
@@ -331,35 +408,7 @@ def eval(args):
 
 def main():
 
-    #The argumaents provided in the code
-    parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
-    parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
-    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
-    parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
-    parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
-    parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
-    parser.add_argument("-fs", "--full_save", help="The episode to save the model", type=int, default=config.FULL_SAVE)
-    parser.add_argument("-md", "--mid_save", help="The episode to save the model, with the extra information", type=int, default=config.MID_SAVE)
-    parser.add_argument("-lr", "--learning_rate", help="The learning rate for the agent", type=float, default=config.LEARNING_RATE)
-    parser.add_argument("-wp", "--warmup", help="The steps needed before training start fully, to give room for the buffer", type=int, default=config.WARMUP)
-    parser.add_argument("-b", "--batch", help="The amount batches taken from the buffer", type=int, default=config.BATCH)
-    parser.add_argument("-tau", "--tau", help="Helps in the soft update of the policy and the target netwrok", type=float, default=config.TAU)
-    parser.add_argument("-ee", "--eps_end", help="The end point of epsilon", type=float, default=config.EPS_END)
-    parser.add_argument("-es", "--eps_start", help="The starting point of the epsilon for exploration", type=float, default=config.EPS_START)
-    parser.add_argument("-ed", "--eps_decay", help="The overall rate for the epsilon to decay", type=float, default=config.EPS_DECAY)
-    parser.add_argument("-g", "--gamma", help="This helps with the discounted rate of the reward", type=float, default=config.GAMMA)
-    parser.add_argument("-c", "--capacity", help="The replay buffer capacity", type=float, default=config.CAPACITY)
-    parser.add_argument("-chk", "--checkpoint", help="A checkpoint for the RL", type=str, default=config.CHECKPOINT)
-    parser.add_argument("-fr", "--full_rewards", help="This works with 3 rewards, rather than only goal", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=False, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)    
-    parser.add_argument("-ad", "--action_delay", help="Number of env steps to hold an action before selecting the next one (simulates robot arm actuation delay)", type=int, default=0)
-    parser.add_argument("-w",   "--wandb",         default=True,
-                    action=argparse.BooleanOptionalAction)
-    parser.add_argument("-p",   "--predict",         default=True,
-                        action=argparse.BooleanOptionalAction)
-    args = parser.parse_args()
+    args = build_parser.parse_args()
 
     if args.training:
         training(args)
@@ -369,3 +418,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
