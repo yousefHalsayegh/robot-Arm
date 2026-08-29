@@ -230,8 +230,8 @@ def training(args):
 
                             #if clipping is used then only inc/dec by 1 if not then calculate the reward with scaling
                             if new_distance < prev_distance:
-                                reward[i] += config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
-                                tracking_reward[i] +=  config.DISTANCE_REWARD * (prev_distance-new_distance / config.CROP)
+                                reward[i] += config.DISTANCE_REWARD * ((prev_distance-new_distance) / config.CROP)
+                                tracking_reward[i] +=  config.DISTANCE_REWARD * ((prev_distance-new_distance) / config.CROP)
 
                             elif new_distance > config.THRESHOLD * config.CROP and new_distance >= prev_distance:
                                 reward[i] -=  config.DISTANCE_REWARD * config.PENALTIY_MOVE
