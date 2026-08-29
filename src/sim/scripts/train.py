@@ -294,7 +294,7 @@ def training(args, env, simulation_app):
                     clipped_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
 
 
-                    episode_return[i] += (brain.gamma ** (decision_steps[i] -1)) * clipped_reward
+                    episode_return[i] += (brain.gamma ** (episode_steps[i] -1)) * clipped_reward
 
                     timeout_i = episode_steps[i] >= int(base_env.cfg.episode_length_s * 100)
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)

@@ -298,7 +298,7 @@ class RewardsCfg:
             weight=1.0,
             params={
                 "current_budget":500,   # 5s * 100Hz / decimation
-                "weight": 0.1,
+                "weight": 0.5,
             },
         )
     axis_bonus = RewTerm(
