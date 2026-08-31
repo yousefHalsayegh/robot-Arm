@@ -74,7 +74,13 @@ def build_parser():
         help="If >0, run this many training iterations then print memory usage and exit")
     parser.add_argument("--run_group", type=str, default="ungrouped",
     help="Label for this combo, used for filtering/grouping in wandb — not used by training logic itself")
+    parser.add_argument("-ol", "--overshoot_lag", type=int, default=1,
+    help="Steps of lag when releasing from a directional action back to neutral, "
+         "simulating mechanical overshoot/settling at the deadzone crossing")
+    
     return parser
+
+NEUTRAL_ACTION = 0
 
 def predict(ale_env_wrapped, c_frames, c_action, T):
     # get inner ALE for state save/restore
@@ -96,7 +102,14 @@ def predict(ale_env_wrapped, c_frames, c_action, T):
     inner.ale.restoreState(saved)
     return np.stack(predict_frame, axis=0)
 
-
+def transit_duration(from_action, to_action, action_delay, overshoot_lag):
+    if from_action == to_action:
+        return 0
+    if from_action == NEUTRAL_ACTION:          # neutral -> directional
+        return action_delay
+    if to_action == NEUTRAL_ACTION:            # directional -> neutral
+        return overshoot_lag
+    return 2 * action_delay  
 def format_time(seconds):
     """
     Used to make time more readable
@@ -176,40 +189,56 @@ def training(args):
         action_lap = np.zeros(args.environment) #simulate the action time of the robot arm
         actions = [{"all": 0, "up" : 0, "down": 0, "neutral": 0} for _ in range(args.environment)] #the amount of actions done
         prev_action = np.zeros(args.environment, dtype=np.int64) #the action prior to ensure no repeated actions
-        
+        settled_action    = np.zeros(args.environment, dtype=np.int64)  
+        pending_target     = np.zeros(args.environment, dtype=np.int64)  
+        transit_remaining  = np.zeros(args.environment, dtype=np.int64)
         with tqdm(total= args.episode, initial=start, desc="Training", unit="ep") as pbar:
             #runing as long as the episode count
             while episode < (args.episode +1):
-                #tracks the overall time of a step
+    
+                ready = transit_remaining <= 0
 
-                #checks which env passed the execution limit
-                ready = action_lap >= args.action_delay
-
-                #predicting the next action and tracking overall the action metrics
                 if args.predict:
+
                     lookahead_state = np.stack([
-                        predict(env.envs[i], state[i], prev_action[i], args.action_delay)
+                        predict(env.envs[i], state[i],
+                                NEUTRAL_ACTION if transit_remaining[i] > 0 else settled_action[i],
+                                transit_remaining[i] if transit_remaining[i] > 0 else args.action_delay)
                         for i in range(args.environment)
                     ])
-                    action = brain.predict_next_action(lookahead_state, steps, env)
+                    candidate_decision = brain.predict_next_action(lookahead_state, steps, env)
                 else:
-                    action = brain.predict_next_action(state, steps, env)
+                    candidate_decision = brain.predict_next_action(state, steps, env)
 
-                current_actions = np.where(ready, action, prev_action)
                 for i in range(args.environment):
-                    if ready[i] and prev_action[i] != current_actions[i]:
-                        if current_actions[i] == 2:
-                            actions[i]['up'] += 1
-                        elif current_actions[i] == 3:
-                            actions[i]['down'] += 1
+                    if ready[i]:
+                        new_target = candidate_decision[i]
+                        duration = transit_duration(settled_action[i], new_target, args.action_delay, args.overshoot_lag)
+                        if duration == 0:
+                            settled_action[i] = new_target        
                         else:
-                            actions[i]['neutral'] += 1
-                        actions[i]["all"] += 1
-                prev_action = current_actions.copy()
-                action_lap = np.where(ready, 1, action_lap + 1)
+                            pending_target[i] = new_target
+                            transit_remaining[i] = duration
 
-                #move the environemtn forward and extracting necesary info 
-                obs, raw_reward, terminated, truncated, _ = env.step(current_actions)
+                for i in range(args.environment):
+                    if ready[i] and prev_action[i] != settled_action[i]:
+                        if settled_action[i] == 2: actions[i]['up'] += 1
+                        elif settled_action[i] == 3: actions[i]['down'] += 1
+                        else: actions[i]['neutral'] += 1
+                        actions[i]['all'] += 1
+
+                prev_action = settled_action.copy()
+
+                env_actions = np.where(transit_remaining > 0, NEUTRAL_ACTION, settled_action)
+
+                obs, raw_reward, terminated, truncated, _ = env.step(env_actions)
+
+                # advance/arrive, after the env step
+                arriving = transit_remaining == 1
+
+                settled_action = np.where(arriving, pending_target, settled_action)
+                transit_remaining = np.maximum(transit_remaining - 1, 0)
+
                 reward = np.zeros(args.environment)
                 done = terminated | truncated
                 next_state = obs
@@ -245,7 +274,7 @@ def training(args):
                 
                 #populate the buffer
                 for i in range(args.environment):
-                    result = nstep.push(i, state[i], current_actions[i], clipped[i], next_state[i], bool(done[i]))
+                    result = nstep.push(i, state[i], candidate_decision[i], clipped[i], next_state[i], bool(done[i]))
                     if result is not None:
                         s, a, R, ns, d, n = result
                         brain.buffer.push((s * 255).round().astype(np.uint8), a, R, (ns * 255).round().astype(np.uint8), d, n)
