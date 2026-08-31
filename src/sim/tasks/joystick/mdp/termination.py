@@ -15,6 +15,7 @@ from sim.tasks.joystick.mdp.rewards import (
     PIVOT_Y_IDX,
     DISPLACEMENT_THRESHOLD_DEG,
     HOME_TOLERANCE_DEG,
+    _ensure_progress_tracker
 )
 from sim.utils.robot_sim import POSITIONS
 
@@ -26,21 +27,26 @@ def reset_or_restore_on_failure(env, env_ids):
     buf = _ensure_displacement_buffer(env)
     buf[env_ids] = 0.0
 
+    progress_buf = _ensure_progress_tracker(env)   # NEW — same unconditional reset, every episode
+    progress_buf[env_ids] = 0.0
+
+    safe_arm, safe_joystick = env._safe_arm_joint_pos, env._safe_joystick_pose
     succeeded = env.termination_manager.get_term("success")[env_ids]
+
     failed_ids = env_ids[~succeeded]
     succeeded_ids = env_ids[succeeded]
 
     if len(failed_ids) > 0:
         robot = env.scene["robot"]
         obj = env.scene["object"]
-        target_arm = env._safe_arm_joint_pos[failed_ids]
+        target_arm = safe_arm[failed_ids]
         robot.write_joint_state_to_sim(target_arm, torch.zeros_like(target_arm), env_ids=failed_ids)
-        obj.write_root_pose_to_sim(env._safe_joystick_pose[failed_ids], env_ids=failed_ids)
+        obj.write_root_pose_to_sim(safe_joystick[failed_ids], env_ids=failed_ids)
 
     if len(succeeded_ids) > 0:
-        env._safe_arm_joint_pos[succeeded_ids] = env.scene["robot"].data.joint_pos[succeeded_ids].clone()
+        safe_arm[succeeded_ids] = env.scene["robot"].data.joint_pos[succeeded_ids].clone()
         obj = env.scene["object"]
-        env._safe_joystick_pose[succeeded_ids] = torch.cat(
+        safe_joystick[succeeded_ids] = torch.cat(
             [obj.data.root_pos_w[succeeded_ids], obj.data.root_quat_w[succeeded_ids]], dim=-1
         )
 

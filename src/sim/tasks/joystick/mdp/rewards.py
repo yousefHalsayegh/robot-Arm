@@ -112,7 +112,8 @@ POSITIONS = {
 
 HOME_TOLERANCE_DEG = 3.0   
 GRIPPER_WRIST_DEG = 5.0 
-
+OVERSHOOT_MARGIN_DEG = 3.0  
+OVERSHOOT_DECAY_DEG  = 10.0 
 def _largest_contour_centroid(mask, min_area=MIN_BLOB_AREA):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -151,6 +152,19 @@ def _detect_joystick_and_arm(rgb_uint8: np.ndarray):
 
     return joystick_xy, arm_xy
 
+
+def _ensure_progress_tracker(env):
+    if not hasattr(env, "_joystick_best_progress"):
+        env._joystick_best_progress = torch.zeros(env.num_envs, device=env.device)
+    return env._joystick_best_progress
+
+
+def reset_progress_tracker(env, env_ids):
+    """EventCfg reset term — zero the tracker for envs being reset."""
+    buf = _ensure_progress_tracker(env)
+    buf[env_ids] = 0.0
+    
+
 def joystick_zone(object_art, env_index):
 
     tilt_deg = np.rad2deg(object_art.data.joint_pos[env_index].cpu().numpy())  # [PivotY, PivotX]
@@ -161,9 +175,9 @@ def joystick_zone(object_art, env_index):
         return "up"
     elif x_deg > DEADZONE_DEG:
         return "down"
-    elif y_deg < -DEADZONE_DEG:
-        return "left"
     elif y_deg > DEADZONE_DEG:
+        return "left"
+    elif y_deg < -DEADZONE_DEG:
         return "right"
     return "neutral"
 
@@ -299,29 +313,44 @@ def vision_shaping_reward(
 
     return reward
 
-
-def gripper_wrist_shaping_reward(env, weight: float = 1.0) -> torch.Tensor:
-
+def joystick_progress_reward(env, weight: float = 0.5) -> torch.Tensor:
     commands = env.command_manager.get_command("joystick_cmd")
-    robot = env.scene["robot"]
+    object_art = env.scene["object"]
+    best_progress = _ensure_progress_tracker(env)
     reward = torch.zeros(env.num_envs, device=env.device)
-    scale_rad = np.deg2rad(GRIPPER_WRIST_DEG)
 
     for i in range(env.num_envs):
         cmd = int(commands[i].item())
-        task = CMD_TO_TASK[cmd]
-        if task not in POSITIONS:
+        task = ACT_TO_ZONE.get(cmd, "neutral")
+        if task not in ("up", "down", "left", "right"):
             continue
 
-        target = torch.tensor(POSITIONS[task], device=env.device, dtype=robot.data.joint_pos.dtype)
-        joint_pos = robot.data.joint_pos[i]
+        tilt_deg = torch.rad2deg(object_art.data.joint_pos[i])
+        x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
 
-        gripper_error = torch.abs(joint_pos[5] - target[5])
-        wrist_error = torch.abs(joint_pos[4] - target[4])
+        if task == "up":
+            progress = -x_deg
+        elif task == "down":
+            progress = x_deg
+        elif task == "left":
+            progress = y_deg
+        else:
+            progress = -y_deg
 
-        gripper_reward = torch.exp(-gripper_error / scale_rad)   # bounded (0,1], 1 at perfect match
-        wrist_reward = torch.exp(-wrist_error / scale_rad)
+        # map raw progress -> the same ramp/plateau/decay shape as before,
+        # but only pay for IMPROVEMENT over the episode's best mark so far
+        if progress <= 0:
+            shaped = 0.0
+        elif progress < DEADZONE_DEG:
+            shaped = (progress / DEADZONE_DEG).item()
+        elif progress <= DEADZONE_DEG + OVERSHOOT_MARGIN_DEG:
+            shaped = 1.0
+        else:
+            overshoot = progress - (DEADZONE_DEG + OVERSHOOT_MARGIN_DEG)
+            shaped = max(0.0, 1.0 - (overshoot / OVERSHOOT_DECAY_DEG).item())
 
-        reward[i] = weight * (gripper_reward + wrist_reward) / 2.0
+        delta = max(0.0, shaped - best_progress[i].item())
+        reward[i] = weight * delta
+        best_progress[i] = max(best_progress[i].item(), shaped)
 
     return reward

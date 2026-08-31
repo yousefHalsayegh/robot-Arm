@@ -317,7 +317,7 @@ class RewardsCfg:
             params={"weight_center": 0.2, "weight_approach": 0.5}
         )
     gripper_wrist_shaping = RewTerm(
-                func=mdp.gripper_wrist_shaping_reward, 
+                func=mdp.joystick_progress_reward, 
                 weight=1.0, 
                 params={"weight": 0.5}
             )
