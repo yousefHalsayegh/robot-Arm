@@ -22,6 +22,262 @@ parameters:
       dueling: true
       noisy: true
       nstep: 3
+    - run_group: d1_full_hard_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d1_full_hard_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d1_full_soft_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d1_full_soft_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d1_no_dueling_hard_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d1_no_dueling_hard_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d1_no_dueling_soft_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d1_no_dueling_soft_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d1_no_noisy_hard_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d1_no_noisy_hard_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d1_no_noisy_soft_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d1_no_noisy_soft_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d1_nstep1_hard_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d1_nstep1_hard_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d1_nstep1_soft_noPred
+      full_rewards: false
+      action_delay: 1
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d1_nstep1_soft_pred
+      full_rewards: false
+      action_delay: 1
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d3_full_hard_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d3_full_hard_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d3_full_soft_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d3_full_soft_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 3
+    - run_group: d3_no_dueling_hard_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d3_no_dueling_hard_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: hard
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d3_no_dueling_soft_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d3_no_dueling_soft_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: soft
+      dueling: false
+      noisy: true
+      nstep: 3
+    - run_group: d3_no_noisy_hard_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d3_no_noisy_hard_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d3_no_noisy_soft_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d3_no_noisy_soft_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: false
+      nstep: 3
+    - run_group: d3_nstep1_hard_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d3_nstep1_hard_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: hard
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d3_nstep1_soft_noPred
+      full_rewards: false
+      action_delay: 3
+      predict: false
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
+    - run_group: d3_nstep1_soft_pred
+      full_rewards: false
+      action_delay: 3
+      predict: true
+      target_update: soft
+      dueling: true
+      noisy: true
+      nstep: 1
     - run_group: d5_full_hard_noPred
       full_rewards: false
       action_delay: 5

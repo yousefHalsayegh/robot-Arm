@@ -284,7 +284,9 @@ def training(args, env, simulation_app):
                 for i in range(N):
                     episode_steps[i] += 1
                     decision_steps[i] += 1
-                    done_i = bool(dones[i].item())
+                    success_i = bool(terminated[i].item())    # true environmental termination — task genuinely ended
+                    timeout_i = bool(truncated[i].item()) and not success_i   # artificial cutoff only
+                    episode_ended = success_i or timeout_i
 
 
                     current_joint_deg = np.rad2deg(joint_next[i])
@@ -296,17 +298,13 @@ def training(args, env, simulation_app):
 
                     episode_return[i] += (brain.gamma ** (episode_steps[i] -1)) * clipped_reward
 
-                    timeout_i = episode_steps[i] >= int(base_env.cfg.episode_length_s * 100)
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
                     
 
                         
-                    if done_i or timeout_i:
-                        # check if success or timeout
-                        if done_i:
-                            brain.success_count += 1
+                    if episode_ended:
     
-                        registered = bool(terminated[i].item())
+
                         # push to buffer
                         brain.buffer.push(
                             (cam_decision[i] * 255).round().astype(np.uint8),
@@ -315,7 +313,7 @@ def training(args, env, simulation_app):
                             episode_return[i],
                             (cam_next[i]* 255).round().astype(np.uint8),
                             joint_next[i],
-                            float(registered),
+                            float(success_i),
                             int(episode_steps[i]),
                         )
                         steps += 1
@@ -330,7 +328,7 @@ def training(args, env, simulation_app):
 
                         # update curriculum success buffer
                         cmd_i = int(commands[i])
-                        command_success_buf[cmd_i].append(registered)
+                        command_success_buf[cmd_i].append(success_i)
 
                         # check curriculum stage change
                         min_rate = min(
@@ -375,7 +373,8 @@ def training(args, env, simulation_app):
                                 "train/steps":       steps,
                                 "episode/episode_return": episode_return[i],
                                 "episode/actual_reward": rewards[i],
-                                "episode/success":       float(registered),
+                                "episode/success":       float(success_i),
+                                "episode/timeout":       float(timeout_i),
                                 "episode/steps_taken":   episode_steps[i],
                                 "episode/episode_time_s": ep_time,
                                 "episode/command":       CMD_NAMES.get(cmd_i, str(cmd_i)),
@@ -427,7 +426,7 @@ def training(args, env, simulation_app):
                                     episode_return[i],
                                     (cam_next[i]* 255).round().astype(np.uint8),
                                     joint_next[i],
-                                    float(done_i),
+                                    0,
                                     decision_steps[i],
                                 )
 

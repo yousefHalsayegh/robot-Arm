@@ -281,7 +281,7 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    success  = DoneTerm(func=mdp.success_termination)
+    success  = DoneTerm(func=mdp.success_termination, time_out=False)
 
     #function
 

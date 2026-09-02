@@ -22,7 +22,7 @@ for reward_name, full_rewards in [("sparse", False), ("full", True)]:
     })
 
 # ── Full cross: delay x component_variant x target_update x predict ──
-for delay in [5]:
+for delay in [1,3,5]:
     for variant_name, variant in component_variants.items():
         for target_update in ["hard", "soft"]:
             for predict in [False, True]:
