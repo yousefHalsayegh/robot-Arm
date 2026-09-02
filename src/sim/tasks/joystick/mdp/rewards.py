@@ -230,54 +230,27 @@ def step_penalty(env, current_budget=10, weight=1.0) -> torch.Tensor:
 def axis_bonus(env, weight=1.0) -> torch.Tensor:
 
     commands = env.command_manager.get_command("joystick_cmd")
-    object = env.scene["object"]
-
+    object_art = env.scene["object"]
     reward = torch.zeros(env.num_envs, device=env.device)
 
     for i in range(env.num_envs):
-        cmd  = int(commands[i].item())
-
-        if cmd == CMD_NEUTRAL:
-            continue   # no bonus for neutral
- 
-        tilt_deg = np.rad2deg(
-            object.data.joint_pos[i].cpu().numpy()
-        )
-        x_deg = tilt_deg[PIVOT_X_IDX]
-        y_deg = tilt_deg[PIVOT_Y_IDX]
- 
-        if cmd in (CMD_UP, CMD_DOWN):
-            # non-commanded axis is left/right
-            if abs(y_deg) < DEADZONE_DEG:
-                reward[i] = weight
- 
-        elif cmd in (CMD_LEFT, CMD_RIGHT):
-            # non-commanded axis is up/down
-            if abs(x_deg) < DEADZONE_DEG:
-                reward[i] = weight
- 
-    return reward
-
-def home_reward(env, weight=1.0) -> torch.Tensor:
-
-    commands = env.command_manager.get_command("joystick_cmd")
-    robot = env.scene["robot"]
-    reward = torch.zeros(env.num_envs, device=env.device)
-
-    home_target_rad = torch.tensor(
-        np.deg2rad(POSITIONS["home"]), device=env.device, dtype=torch.float32
-    )
-    tol_rad = np.deg2rad(HOME_TOLERANCE_DEG)
-
-    for i in range(env.num_envs):
-        if int(commands[i].item()) != CMD_HOME:
+        cmd = int(commands[i].item())
+        task = ACT_TO_ZONE.get(cmd, "neutral")
+        if task not in ("up", "down", "left", "right"):
             continue
 
-        joint_pos = robot.data.joint_pos[i]   # radians, shape [6]
-        max_dev = torch.max(torch.abs(joint_pos - home_target_rad))
+        if not joystick_registered(object_art, i, task):
+            continue  # only evaluate cleanliness AT the moment of real success
 
-        if max_dev < tol_rad:
-            reward[i] = weight
+        tilt_deg = np.rad2deg(object_art.data.joint_pos[i].cpu().numpy())
+        x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
+
+        if task in ("up", "down"):
+            if abs(y_deg) < DEADZONE_DEG:
+                reward[i] = weight
+        else:  # left, right
+            if abs(x_deg) < DEADZONE_DEG:
+                reward[i] = weight
 
     return reward
 

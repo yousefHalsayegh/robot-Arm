@@ -244,7 +244,6 @@ def training(args, env, simulation_app):
 
     action_decision = brain.predict_next_action_batch(cam_states,  joint_states)
     prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
-
     try:
         with tqdm(total=args.episodes, initial=start_ep,
                   desc="LowLevel Training", unit="ep") as pbar:
@@ -269,7 +268,7 @@ def training(args, env, simulation_app):
                 obs, rewards, terminated, truncated, info = env.step(
                     torch.tensor(target_joints, dtype=torch.float32, device=device)
                 )
-
+               
                 dones = terminated | truncated
 
                 # ── update frame stacks ───────────────────────────────────────
@@ -300,7 +299,7 @@ def training(args, env, simulation_app):
 
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
                     
-
+                    
                         
                     if episode_ended:
     
@@ -317,7 +316,6 @@ def training(args, env, simulation_app):
                             int(episode_steps[i]),
                         )
                         steps += 1
-
                         # train
                         critic_loss, actor_loss, train_diagnostics = brain.train()
                         
@@ -355,6 +353,13 @@ def training(args, env, simulation_app):
 
                         # wandb
                         if args.wandb:
+                            term_names = base_env.reward_manager._term_names
+                            step_reward = base_env.reward_manager._step_reward[i]  # this env's row, all terms, this exact step
+    
+                            reward_term_log = {
+                                f"reward_terms/{name}": step_reward[j].item()
+                                for j, name in enumerate(term_names)
+                            }
                             per_cmd_rates = {
                                 f"success_rate/{CMD_NAMES[c]}":
                                     sum(command_success_buf[c]) /
@@ -382,6 +387,7 @@ def training(args, env, simulation_app):
                                 "curriculum/stage":      current_stage,
                                 "curriculum/min_rate":   min_rate,
                                 "curriculum/ep_length":  base_env.cfg.episode_length_s,
+                                **reward_term_log,
                                 **per_cmd_rates,
                                 **train_diagnostics,  
                                 **joint_log,
@@ -431,6 +437,28 @@ def training(args, env, simulation_app):
                                 )
 
                         steps += 1 
+                        if args.wandb:
+                            joint_log = {
+                                f"joint_movement/env{i}/{name}": joint_delta_deg[j]
+                                for j, name in enumerate(JOINT_NAMES)
+                            }
+                            term_names = base_env.reward_manager._term_names
+                            step_reward = base_env.reward_manager._step_reward[i]  # this env's row, all terms, this exact step
+    
+                            reward_term_log = {
+                                f"reward_terms/{name}": step_reward[j].item()
+                                for j, name in enumerate(term_names)
+                            }
+                            wandb.log({
+                                "train/critic_loss": critic_loss,
+                                "train/actor_loss":  actor_loss,
+                                "train/alpha":       brain.alpha.item(),
+                                "train/buffer_size": len(brain.buffer),
+                                "train/steps":       steps,
+                                "train/speed": abs(time.time() - start),
+                                **joint_log,
+                                **reward_term_log
+                            }, step=steps)
                         critic_loss, actor_loss, train_diagnostics = brain.train()
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
@@ -443,10 +471,7 @@ def training(args, env, simulation_app):
                 # update states for next step
                 cam_states   = cam_next
                 joint_states = joint_next
-                if args.wandb:
-                    wandb.log({
-                            "train/speed": abs(time.time() - start),
-                    }, step=steps)
+                    
 
 
 

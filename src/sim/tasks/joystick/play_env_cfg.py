@@ -297,8 +297,8 @@ class RewardsCfg:
             func=mdp.step_penalty,
             weight=1.0,
             params={
-                "current_budget":500,   # 5s * 100Hz / decimation
-                "weight": 0.5,
+                "current_budget":10, 
+                "weight": 1.5,
             },
         )
     axis_bonus = RewTerm(
@@ -306,17 +306,12 @@ class RewardsCfg:
             weight=1.0,
             params={"weight": 0.5},
         )
-    home_success = RewTerm(
-            func=mdp.home_reward,
-            weight=1.0, 
-            params={"weight": 1.0},
-        )
     vision_shaping = RewTerm(
             func=mdp.vision_shaping_reward, 
             weight=1.0, 
-            params={"weight_center": 0.2, "weight_approach": 0.5}
+            params={"weight_center": 0.05, "weight_approach": 0.1}
         )
-    gripper_wrist_shaping = RewTerm(
+    joystick_progress_shaping = RewTerm(
                 func=mdp.joystick_progress_reward, 
                 weight=1.0, 
                 params={"weight": 0.5}
