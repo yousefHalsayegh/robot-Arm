@@ -156,7 +156,7 @@ class JoystickCommandTerm(CommandTerm):
 @configclass
 class JoystickCommandTermCfg(ComTerm):
     class_type: type = JoystickCommandTerm      # set below after class definition
-    resampling_time_range: tuple = (0.0, 0.0)
+    resampling_time_range: tuple = (10.0, 20.0)
     debug_vis: bool = False
 
 # ── curriculum term — minimum success rate across all 5 commands ──────────────

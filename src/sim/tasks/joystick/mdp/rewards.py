@@ -211,9 +211,7 @@ def sparse(env, weight=1.0) -> torch.Tensor:
 
     for i in range(env.num_envs):
         task = ACT_TO_ZONE[int(commands[i].item())]
-        tilt_deg = np.rad2deg(object.data.joint_pos[i].cpu().numpy())
-        x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
-        print(f"[sparse] env={i} task={task} x_deg={x_deg:.2f} y_deg={y_deg:.2f}")
+    
         if joystick_registered(object, i, task):
             reward[i] = weight
 
@@ -247,7 +245,6 @@ def axis_bonus(env, weight=1.0) -> torch.Tensor:
 
         tilt_deg = np.rad2deg(object_art.data.joint_pos[i].cpu().numpy())
         x_deg, y_deg = tilt_deg[PIVOT_X_IDX], tilt_deg[PIVOT_Y_IDX]
-        print(f"[axis_bonus] env={i} task={task} x_deg={x_deg:.2f} y_deg={y_deg:.2f}")
         if task in ("up", "down"):
             if abs(y_deg) < DEADZONE_DEG:
                 reward[i] = weight
@@ -315,7 +312,6 @@ def joystick_progress_reward(env, weight: float = 0.5) -> torch.Tensor:
 
         # map raw progress -> the same ramp/plateau/decay shape as before,
         # but only pay for IMPROVEMENT over the episode's best mark so far
-        print(f"[progress] env={i} task={task} x_deg={x_deg:.2f} y_deg={y_deg:.2f}")
         if progress <= 0:
             shaped = 0.0
         elif progress < DEADZONE_DEG:
