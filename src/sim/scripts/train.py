@@ -225,6 +225,7 @@ def training(args, env, simulation_app):
     joint_decision = None
     action_decision = None
     episode_return = np.zeros(N, dtype=np.float32)
+    segment_return  = np.zeros(N, dtype=np.float32)
     decision_steps = np.zeros(N, dtype=int)
     critic_loss, actor_loss = 0.0, 0.0
 
@@ -293,9 +294,23 @@ def training(args, env, simulation_app):
                     prev_joint_pos_deg[i] = current_joint_deg
                     
                     clipped_reward = np.clip(rewards[i].cpu().numpy(), -5, 5)
-
+                    
 
                     episode_return[i] += (brain.gamma ** (episode_steps[i] -1)) * clipped_reward
+                    segment_return[i] += (brain.gamma ** (decision_steps[i] - 1)) * clipped_reward
+
+
+                    # print("[reward]; ", rewards[i])
+                    # print("[cipped reward]; ", clipped_reward)
+                    # print("[segment_return]; ", segment_return[i])
+                    # term_names = base_env.reward_manager._term_names
+                    # step_reward = base_env.reward_manager._step_reward[i]  
+
+                    # reward_term_log = {
+                    #     f"reward_terms/{name}": step_reward[j].item()
+                    #     for j, name in enumerate(term_names)
+                    # }
+                    # print("[step reward]",reward_term_log)
 
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
                     
@@ -309,11 +324,11 @@ def training(args, env, simulation_app):
                             (cam_decision[i] * 255).round().astype(np.uint8),
                             joint_decision[i],
                             actions[i].copy(),
-                            episode_return[i],
+                            segment_return[i],
                             (cam_next[i]* 255).round().astype(np.uint8),
                             joint_next[i],
                             float(success_i),
-                            int(episode_steps[i]),
+                            int(decision_steps[i]),
                         )
                         steps += 1
                         # train
@@ -377,7 +392,7 @@ def training(args, env, simulation_app):
                                 "train/buffer_size": len(brain.buffer),
                                 "train/steps":       steps,
                                 "episode/episode_return": episode_return[i],
-                                "episode/actual_reward": rewards[i],
+                                "episode/decision_reward": segment_return[i],
                                 "episode/success":       float(success_i),
                                 "episode/timeout":       float(timeout_i),
                                 "episode/steps_taken":   episode_steps[i],
@@ -421,6 +436,7 @@ def training(args, env, simulation_app):
                         joint_decision[i] = joint_next[i].copy()
                         episode_return[i] = 0
                         decision_steps[i]  = 0
+                        segment_return[i] = 0.0
                         action_decision[i] = brain.predict_next_action(cam_next[i], joint_next[i])
 
                     elif decision_boundary:
@@ -429,7 +445,7 @@ def training(args, env, simulation_app):
                                     (cam_decision[i] * 255).round().astype(np.uint8),
                                     joint_decision[i],
                                     actions[i].copy(),
-                                    episode_return[i],
+                                    segment_return[i],
                                     (cam_next[i]* 255).round().astype(np.uint8),
                                     joint_next[i],
                                     0,
@@ -437,6 +453,8 @@ def training(args, env, simulation_app):
                                 )
 
                         steps += 1 
+
+                        critic_loss, actor_loss, train_diagnostics = brain.train()
                         if args.wandb:
                             joint_log = {
                                 f"joint_movement/env{i}/{name}": joint_delta_deg[j]
@@ -456,16 +474,18 @@ def training(args, env, simulation_app):
                                 "train/buffer_size": len(brain.buffer),
                                 "train/steps":       steps,
                                 "train/speed": abs(time.time() - start),
+                                "episode/decision_reward": segment_return[i],
                                 **joint_log,
-                                **reward_term_log
+                                **reward_term_log,
+                                **train_diagnostics,  
                             }, step=steps)
-                        critic_loss, actor_loss, train_diagnostics = brain.train()
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
                         action_decision[i] = brain.predict_next_action(
                             cam_next[i], joint_next[i]
                         )
                         decision_steps[i]  = 0
+                        segment_return[i] = 0.0
                         
 
                 # update states for next step

@@ -164,6 +164,11 @@ def reset_progress_tracker(env, env_ids):
     buf = _ensure_progress_tracker(env)
     buf[env_ids] = 0.0
     
+def _ensure_displacement_buffer(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Lazily create the per-env joystick-displacement tracker."""
+    if not hasattr(env, "_joystick_max_displacement"):
+        env._joystick_max_displacement = torch.zeros(env.num_envs, device=env.device)
+    return env._joystick_max_displacement
 
 def joystick_zone(object_art, env_index):
 
@@ -208,12 +213,16 @@ def sparse(env, weight=1.0) -> torch.Tensor:
     commands = env.command_manager.get_command("joystick_cmd")
 
     reward = torch.zeros(env.num_envs, device=env.device)
+    max_disp = _ensure_displacement_buffer(env)
 
     for i in range(env.num_envs):
         task = ACT_TO_ZONE[int(commands[i].item())]
     
-        if joystick_registered(object, i, task):
-            reward[i] = weight
+        if not joystick_registered(object, i, task):
+            continue
+        if task == "neutral" and not (max_disp[i] > DISPLACEMENT_THRESHOLD_DEG):
+            continue
+        reward[i] = weight
 
     return reward
 

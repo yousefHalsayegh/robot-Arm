@@ -284,7 +284,10 @@ class Actor(nn.Module):
         tanh_x  = torch.tanh(x_t)
         action  = tanh_x * ACTION_SCALE
 
-        log_prob = dist.log_prob(x_t) - torch.log(1 - tanh_x.pow(2) + 1e-6)  
+        tanh_x_safe = tanh_x.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
+
+
+        log_prob = dist.log_prob(x_t) - torch.log(ACTION_SCALE * (1 - tanh_x_safe.pow(2)) + 1e-6)
         log_prob = log_prob.sum(dim=-1)
         return action, log_prob
 

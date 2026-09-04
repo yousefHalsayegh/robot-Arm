@@ -291,30 +291,30 @@ class RewardsCfg:
     parse_success = RewTerm(
             func=mdp.sparse,
             weight=1.0,
-            params={"weight": 1.0},
+            params={"weight": 5.0},
         )
     step_penalty = RewTerm(
             func=mdp.step_penalty,
             weight=1.0,
             params={
                 "current_budget":10, 
-                "weight": 1.5,
+                "weight":1,
             },
         )
     axis_bonus = RewTerm(
             func=mdp.axis_bonus,
             weight=1.0,
-            params={"weight": 0.5},
+            params={"weight": 2.5},
         )
     vision_shaping = RewTerm(
             func=mdp.vision_shaping_reward, 
             weight=1.0, 
-            params={"weight_center": 0.05, "weight_approach": 0.1}
+            params={"weight_center": 0.1, "weight_approach": 0.2}
         )
     joystick_progress_shaping = RewTerm(
                 func=mdp.joystick_progress_reward, 
                 weight=1.0, 
-                params={"weight": 0.5}
+                params={"weight": 10}
             )
     
 #TODO; fix the memory problem since it is saving too much 
@@ -333,6 +333,7 @@ class RecordCfg(RecorderManagerBaseCfg):
 class EventCfg:
 
     reset_or_restore = EventTerm(func=mdp.reset_or_restore_on_failure, mode="reset")
+    reset_progress   = EventTerm(func=mdp.reset_progress_tracker, mode="reset")
 
 @configclass
 class PlayEnvCfg(ManagerBasedRLEnvCfg):
@@ -355,7 +356,7 @@ class PlayEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 1
-        self.episode_length_s = 10
+        self.episode_length_s = STAGE_EPISODE_LENGTHS[0]
         self.viewer.eye = (2.5, 2.5, 1.5)
         # simulation settings
         self.sim.dt = 0.01  # 100Hz
