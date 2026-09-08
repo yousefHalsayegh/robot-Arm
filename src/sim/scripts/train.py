@@ -171,6 +171,7 @@ def training(args, env, simulation_app):
             brain.buffer.capacity = args.capacity
 
         print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
+        brain.load_checkpoint(f"runs/LowLevel-pretrain/Checkpoints/manipulation_brain_0.pth")
     else:
         print(f"no prefill buffer found at {args.prefill_path} — generating one now")
 
