@@ -300,25 +300,11 @@ def training(args, env, simulation_app):
                     episode_return[i] += (brain.gamma ** (episode_steps[i] -1)) * clipped_reward
                     segment_return[i] += (brain.gamma ** (decision_steps[i] - 1)) * clipped_reward
 
-
-                    # print("[reward]; ", rewards[i])
-                    # print("[cipped reward]; ", clipped_reward)
-                    # print("[segment_return]; ", segment_return[i])
-                    # term_names = base_env.reward_manager._term_names
-                    # step_reward = base_env.reward_manager._step_reward[i]  
-
-                    # reward_term_log = {
-                    #     f"reward_terms/{name}": step_reward[j].item()
-                    #     for j, name in enumerate(term_names)
-                    # }
-                    # print("[step reward]",reward_term_log)
-
                     decision_boundary = (decision_steps[i] >= DECISION_STEPS)
                     
                     
                         
                     if episode_ended:
-    
 
                         # push to buffer
                         brain.buffer.push(
@@ -345,11 +331,22 @@ def training(args, env, simulation_app):
                         command_success_buf[cmd_i].append(success_i)
 
                         # check curriculum stage change
-                        min_rate = min(
-                            sum(command_success_buf[c]) /
-                            max(len(command_success_buf[c]), 1)
+                        per_command_counts = {
+                            c: {
+                                "attempts": len(command_success_buf[c]),
+                                "successes": sum(command_success_buf[c]),
+                                "rate": sum(command_success_buf[c]) / max(len(command_success_buf[c]), 1),
+                            }
                             for c in ALL_COMMANDS
-                        )
+                        }
+                        per_command_log = {}
+                        for c, counts in per_command_counts.items():
+                            name = CMD_NAMES.get(c, str(c))
+                            per_command_log[f"curriculum/{name}_attempts"]  = counts["attempts"]
+                            per_command_log[f"curriculum/{name}_successes"] = counts["successes"]
+                            per_command_log[f"curriculum/{name}_rate"]      = counts["rate"]
+
+                        min_rate = min(per_command_counts[c]["rate"] for c in ALL_COMMANDS)
                         if min_rate >= UPPER_THRESHOLD and current_stage < 2:
                             current_stage += 1
                             base_env.cfg.episode_length_s = \
@@ -407,8 +404,8 @@ def training(args, env, simulation_app):
                                 **per_cmd_rates,
                                 **train_diagnostics,  
                                 **joint_log,
+                                **per_command_log
                             }, step=steps)
-                                
 
 
                         if episode % args.mid_save == 0 and episode != 0:

@@ -58,7 +58,7 @@ class Brain:
         )
 
         # automatic entropy tuning
-        self.target_entropy  = -10
+        self.target_entropy  = -13
         self.log_alpha       = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optimiser = torch.optim.Adam([self.log_alpha], lr=lr)
 

@@ -301,16 +301,16 @@ class RewardsCfg:
                 "weight":1,
             },
         )
-    axis_bonus = RewTerm(
-            func=mdp.axis_bonus,
-            weight=1.0,
-            params={"weight": 2.5},
-        )
-    vision_shaping = RewTerm(
-            func=mdp.vision_shaping_reward, 
-            weight=1.0, 
-            params={"weight_center": 0.1, "weight_approach": 0.2}
-        )
+    # axis_bonus = RewTerm(
+    #         func=mdp.axis_bonus,
+    #         weight=1.0,
+    #         params={"weight": 2.5},
+    #     )
+    # vision_shaping = RewTerm(
+    #         func=mdp.vision_shaping_reward, 
+    #         weight=1.0, 
+    #         params={"weight_center": 0.1, "weight_approach": 0.2}
+    #     )
     joystick_progress_shaping = RewTerm(
                 func=mdp.joystick_progress_reward, 
                 weight=1.0, 

@@ -22,33 +22,33 @@ from sim.utils.robot_sim import POSITIONS
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-
+STICK_DEFAULT_POS = [0.305, -0.058, 0.0]
+STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
 def reset_or_restore_on_failure(env, env_ids):
     buf = _ensure_displacement_buffer(env)
     buf[env_ids] = 0.0
 
-    progress_buf = _ensure_progress_tracker(env)   # NEW — same unconditional reset, every episode
+    progress_buf = _ensure_progress_tracker(env)
     progress_buf[env_ids] = 0.0
 
-    safe_arm, safe_joystick = env._safe_arm_joint_pos, env._safe_joystick_pose
     succeeded = env.termination_manager.get_term("success")[env_ids]
-
     failed_ids = env_ids[~succeeded]
-    succeeded_ids = env_ids[succeeded]
+    # succeeded_ids need no action at all -- leaving the arm/joystick untouched
+    # IS "continue from previous position"
 
     if len(failed_ids) > 0:
         robot = env.scene["robot"]
         obj = env.scene["object"]
-        target_arm = safe_arm[failed_ids]
-        robot.write_joint_state_to_sim(target_arm, torch.zeros_like(target_arm), env_ids=failed_ids)
-        obj.write_root_pose_to_sim(safe_joystick[failed_ids], env_ids=failed_ids)
 
-    if len(succeeded_ids) > 0:
-        safe_arm[succeeded_ids] = env.scene["robot"].data.joint_pos[succeeded_ids].clone()
-        obj = env.scene["object"]
-        safe_joystick[succeeded_ids] = torch.cat(
-            [obj.data.root_pos_w[succeeded_ids], obj.data.root_quat_w[succeeded_ids]], dim=-1
-        )
+        home_target = torch.tensor(
+            POSITIONS["home"], device=env.device, dtype=robot.data.joint_pos.dtype
+        ).unsqueeze(0).expand(len(failed_ids), -1)
+        robot.write_joint_state_to_sim(home_target, torch.zeros_like(home_target), env_ids=failed_ids)
+
+        stick_pos = torch.tensor(STICK_DEFAULT_POS, device=env.device, dtype=obj.data.root_pos_w.dtype)
+        stick_rot = torch.tensor(STICK_DEFAULT_ROT, device=env.device, dtype=obj.data.root_quat_w.dtype)
+        stick_pose = torch.cat([stick_pos, stick_rot]).unsqueeze(0).expand(len(failed_ids), -1)
+        obj.write_root_pose_to_sim(stick_pose, env_ids=failed_ids)
 
 def _ensure_displacement_buffer(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Lazily create the per-env joystick-displacement tracker."""
