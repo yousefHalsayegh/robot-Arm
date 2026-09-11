@@ -294,7 +294,7 @@ def generate_synthetic_transitions(
     if export_lerobot:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         lerobot_dataset = LeRobotDataset.create(
-            repo_id="training/joystick_synthetic_2",
+            repo_id="training/joystick_synthetic_2.5",
             fps=30,
             robot_type="so_follower",
             features={

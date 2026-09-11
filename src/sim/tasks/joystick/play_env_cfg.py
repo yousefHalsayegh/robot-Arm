@@ -28,7 +28,7 @@ from isaaclab.managers import CommandTerm, ActionTerm, RecorderTerm
 from isaaclab.managers.recorder_manager import RecorderManagerBaseCfg, DatasetExportMode
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -229,7 +229,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
 
 
     #camera
-    side = CameraCfg(
+    side = TiledCameraCfg(
         prim_path = "{ENV_REGEX_NS}/side",
         update_period=0.1,
         height=720,

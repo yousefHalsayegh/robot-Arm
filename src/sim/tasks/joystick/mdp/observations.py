@@ -8,15 +8,15 @@ import cv2
 from collections import deque
 from isaaclab.envs import ManagerBasedRLEnv
 
-TARGET_H = 224
-TARGET_W = 224
+TARGET_H = 128
+TARGET_W = 128
 
 
 class Frames():
     """
     This class is used in the place of the camera class to read directly from the game state.
     """
-    def __init__(self, n=4):
+    def __init__(self, n=3):
         self.frames = deque(maxlen=n)
         self.n = n
 

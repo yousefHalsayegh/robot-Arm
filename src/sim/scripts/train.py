@@ -11,7 +11,7 @@ parser.add_argument("-ep",  "--episodes",      type=int,   default=10000)
 parser.add_argument("-fs",  "--full_save",     type=int,   default=500)
 parser.add_argument("-md",  "--mid_save",      type=int,   default=100)
 parser.add_argument("-chk", "--checkpoint",    type=str,   default="")
-parser.add_argument("-c", "--capacity",    type=int, default=10000)
+parser.add_argument("-c", "--capacity",    type=int, default=50000)
 parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
@@ -282,6 +282,9 @@ def training(args, env, simulation_app):
 
                 cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
                 joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()
+                # quick check, anywhere in the step loop
+                
+
                 for i in range(N):
                     episode_steps[i] += 1
                     decision_steps[i] += 1
@@ -305,7 +308,6 @@ def training(args, env, simulation_app):
                     
                         
                     if episode_ended:
-
                         # push to buffer
                         brain.buffer.push(
                             (cam_decision[i] * 255).round().astype(np.uint8),

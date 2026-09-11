@@ -330,8 +330,8 @@ class JointsNetwork(nn.Module):
         return self.net(x)
 
 
-class CameraNetwork(nn.Module):
-
+class CameraNetwork_Resnet(nn.Module):
+    #heavier approach which builds from a resnet dropped currently due to hardware limitation and it is not needed for the current approach
 
     def __init__(self, cam_embedding_size: int = 256):
         super().__init__()
@@ -355,8 +355,44 @@ class CameraNetwork(nn.Module):
         return self.embed_head(self.backbone(x))
 
 
+class CameraNetwork(nn.Module):
+
+    def __init__(self, in_channels: int = 12, cam_embedding_size: int = 256):
+        super().__init__()
+
+        def conv_block(in_ch, out_ch, kernel, stride, padding, groups=8):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=kernel, stride=stride,
+                          padding=padding, bias=False),
+                nn.GroupNorm(groups, out_ch),
+                nn.ReLU(inplace=True),
+            )
+
+        self.backbone = nn.Sequential(
+            conv_block(in_channels, 32, kernel=4, stride=2, padding=1),  # 128 -> 64
+            conv_block(32, 64, kernel=4, stride=2, padding=1),           # 64  -> 32
+            conv_block(64, 64, kernel=4, stride=2, padding=1),           # 32  -> 16
+            conv_block(64, 64, kernel=3, stride=2, padding=1),           # 16  -> 8
+            conv_block(64, 64, kernel=3, stride=2, padding=1),           # 8   -> 4
+        )
+
+        self.embed_head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 4 * 4, cam_embedding_size),
+            nn.LayerNorm(cam_embedding_size),
+            nn.ReLU(),
+        )
+
+        for m in self.backbone.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.embed_head(self.backbone(x))
+
+
 class RunningNormaliser:
-    
+    #un used might need to use it later as a test 
 
     def __init__(self, epsilon = 1e-8):
         

@@ -33,21 +33,28 @@ def reset_or_restore_on_failure(env, env_ids):
 
     succeeded = env.termination_manager.get_term("success")[env_ids]
     failed_ids = env_ids[~succeeded]
-    # succeeded_ids need no action at all -- leaving the arm/joystick untouched
-    # IS "continue from previous position"
 
     if len(failed_ids) > 0:
         robot = env.scene["robot"]
         obj = env.scene["object"]
-
+        n = len(failed_ids)
         home_target = torch.tensor(
             POSITIONS["home"], device=env.device, dtype=robot.data.joint_pos.dtype
-        ).unsqueeze(0).expand(len(failed_ids), -1)
-        robot.write_joint_state_to_sim(home_target, torch.zeros_like(home_target), env_ids=failed_ids)
+        ).unsqueeze(0).repeat(n, 1)
 
-        stick_pos = torch.tensor(STICK_DEFAULT_POS, device=env.device, dtype=obj.data.root_pos_w.dtype)
-        stick_rot = torch.tensor(STICK_DEFAULT_ROT, device=env.device, dtype=obj.data.root_quat_w.dtype)
-        stick_pose = torch.cat([stick_pos, stick_rot]).unsqueeze(0).expand(len(failed_ids), -1)
+        robot.set_joint_position_target(home_target, env_ids=failed_ids)
+        robot.write_data_to_sim()
+
+        stick_pos_local = torch.tensor(
+            STICK_DEFAULT_POS, device=env.device, dtype=obj.data.root_pos_w.dtype
+        )
+        stick_rot = torch.tensor(
+            STICK_DEFAULT_ROT, device=env.device, dtype=obj.data.root_quat_w.dtype
+        )
+        stick_world_pos = stick_pos_local.unsqueeze(0) + env.scene.env_origins[failed_ids]
+        stick_rot_batch = stick_rot.unsqueeze(0).repeat(n, 1)   
+        stick_pose = torch.cat([stick_world_pos, stick_rot_batch], dim=-1)
+
         obj.write_root_pose_to_sim(stick_pose, env_ids=failed_ids)
 
 def _ensure_displacement_buffer(env: ManagerBasedRLEnv) -> torch.Tensor:
