@@ -28,11 +28,11 @@ class Brain:
         self.device  = "cuda"
 
         # shared encoder and joint mlp
-        self.encoder   = CameraNetwork(ce).to(self.device)
+        self.encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.joint_mlp = JointsNetwork(je).to(self.device)
 
         # target encoder and joint mlp
-        self.target_encoder   = CameraNetwork(ce).to(self.device)
+        self.target_encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.target_joint_mlp = JointsNetwork(je).to(self.device)
         self.target_encoder.load_state_dict(self.encoder.state_dict())
         self.target_joint_mlp.load_state_dict(self.joint_mlp.state_dict())

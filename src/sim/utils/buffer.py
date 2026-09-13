@@ -443,7 +443,7 @@ def main(args_cli, simulation_app):
     base_env.scene.update(base_env.sim.get_physics_dt())
  
     # frame stacks
-    frame_stacks = [Frames(n=4)]
+    frame_stacks = [Frames(n=3)]
     update_frame_stack(base_env, frame_stacks, reset_ids=[0])
  
     # buffer

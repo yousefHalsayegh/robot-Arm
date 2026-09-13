@@ -158,7 +158,7 @@ def training(args, env, simulation_app):
         )
 
     # ── frame stacks — one per env ────────────────────────────────────────────
-    frame_stacks = [Frames(n=4) for _ in range(N)]
+    frame_stacks = [Frames(n=3) for _ in range(N)]
     steps_counter = [0]
     if os.path.exists(args.prefill_path):
         with open(args.prefill_path, "rb") as f:
@@ -175,7 +175,7 @@ def training(args, env, simulation_app):
     else:
         print(f"no prefill buffer found at {args.prefill_path} — generating one now")
 
-        prefill_frame_stacks = [Frames(n=4)]   # single-env, matches fill_buffer's own assumption
+        prefill_frame_stacks = [Frames(n=3)]   # single-env, matches fill_buffer's own assumption
         update_frame_stack(base_env, prefill_frame_stacks, reset_ids=[0])
 
         if args.lerobot_repo_id:
