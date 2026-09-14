@@ -61,14 +61,17 @@ class Brain:
 
         # automatic entropy tuning
         self.target_entropy  = -13
-        self.log_alpha       = torch.zeros(1, requires_grad=True, device=self.device)
+        self.log_alpha = torch.tensor(np.log(0.05), requires_grad=True, device=self.device)
         self.alpha_optimiser = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.buffer       = ReplayBuffer(c)
         self.reward = 0
-        # self.success_count = 0
-        # self.min_successes_before_decay = 10  
-        # self.alpha_floor = 0.01
+        self.critic_loss_ema = None
+        self.critic_loss_ema_decay = 0.99
+        self.alpha_warmup_value = 0.05
+        self.critic_loss_warmup_ratio = 0.10  
+        self.critic_loss_ema_initial = None
+        self._warmup_baseline_samples = []
 
 
 
@@ -113,9 +116,9 @@ class Brain:
             joint_emb = self.joint_mlp(joint_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)   # cmd_t is int64, cam/joint_emb are float32
+                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)   # cmd_t is int64 concatenated with float32
                 hidden = self.actor.net(fused)
-                action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
+                action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE 
             else:
                 action, _ = self.actor(cam_emb, joint_emb, cmd_t)
 
@@ -137,6 +140,8 @@ class Brain:
         joint_nexts  = torch.FloatTensor(np.array([t.joint_next   for t in batch])).to(self.device)
         dones        = torch.FloatTensor(np.array([t.done         for t in batch])).to(self.device)
         n_steps      = torch.FloatTensor(np.array([t.n            for t in batch])).to(self.device)
+
+        alpha_used = self._get_alpha_for_training()
         # critic update
         with torch.no_grad():
             cam_next_emb   = self.target_encoder(cam_nexts)
@@ -146,7 +151,7 @@ class Brain:
             q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, next_action, commands)
             q_next   = torch.min(q1_next, q2_next).squeeze(1)
             target_q = rewards + (self.gamma ** n_steps) * (1 - dones) * \
-                    (q_next - self.alpha.detach() * next_log_prob)
+                    (q_next - alpha_used * next_log_prob)
            
             
                 
@@ -160,6 +165,17 @@ class Brain:
             weights * F.mse_loss(q1, target_q, reduction="none")
             + weights * F.mse_loss(q2, target_q, reduction="none")
         ).mean()
+
+        cl = critic_loss.item()
+        if self.critic_loss_ema_initial is None:
+            self._warmup_baseline_samples.append(cl)
+            if len(self._warmup_baseline_samples) >= 10:
+                self.critic_loss_ema_initial = float(np.mean(self._warmup_baseline_samples))
+                self.critic_loss_ema = self.critic_loss_ema_initial
+        else:
+            self.critic_loss_ema = self.critic_loss_ema_decay * self.critic_loss_ema + (1 - self.critic_loss_ema_decay) * cl
+
+
         self.critic_optimiser.zero_grad()
         critic_loss.backward()
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -168,7 +184,7 @@ class Brain:
             + list(self.critic.parameters()), 10
         )
         self.critic_optimiser.step()
-        #self.buffer.update_priorities(indices, td_errors)
+        
         # actor update — encoder gradients stopped
         cam_emb_d   = cam_emb.detach()
         joint_emb_d = joint_emb.detach()
@@ -176,7 +192,7 @@ class Brain:
         new_action, log_prob = self.actor(cam_emb_d, joint_emb_d, commands)
         q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, new_action, commands)
         q_new      = torch.min(q1_new, q2_new).squeeze(1)
-        actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
+        actor_loss = (alpha_used* log_prob - q_new).mean()
         self.actor_optimiser.zero_grad()
         actor_loss.backward()
         actor_grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
@@ -256,26 +272,24 @@ class Brain:
         self.critic.load_state_dict(ckpt["critic"])
         self.critic_target.load_state_dict(ckpt["critic_target"])
 
-        if "command_net" in ckpt:
-            self.command_net.load_state_dict(ckpt["command_net"])
-        else:
-            print("[load_checkpoint] no 'command_net' in checkpoint — "
-                "leaving it at fresh initialization (pre-command-conditioning checkpoint).")
-
         self.critic_optimiser.load_state_dict(ckpt["critic_opt"])
         self.actor_optimiser.load_state_dict(ckpt["actor_opt"])
         self.alpha_optimiser.load_state_dict(ckpt["alpha_opt"])
 
         self.log_alpha.data.copy_(ckpt["log_alpha"].to(self.device))
 
-        if "norm_success" in ckpt:
-            self.reward.load_state_dict(ckpt["norm_success"])
-
         return ckpt.get("steps", 0), ckpt.get("episode", 0)
     
     @property
     def alpha(self) -> torch.Tensor:
         return self.log_alpha.exp()
+
+    def _get_alpha_for_training(self) -> torch.Tensor:
+        if self.critic_loss_ema is None or self.critic_loss_ema_initial is None:
+            return torch.tensor(self.alpha_warmup_value, device=self.device)
+        if self.critic_loss_ema < self.critic_loss_ema_initial * self.critic_loss_warmup_ratio:
+            return self.alpha.detach()
+        return torch.tensor(self.alpha_warmup_value, device=self.device)
 # ADD Actor
 class Actor(nn.Module):
 

@@ -56,3 +56,4 @@ logs/
 */runs/
 */logs/
 *.csv
+**/sweep_export/
