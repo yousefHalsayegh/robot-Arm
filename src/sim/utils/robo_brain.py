@@ -113,7 +113,7 @@ class Brain:
             joint_emb = self.joint_mlp(joint_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)
+                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)   # cmd_t is int64, cam/joint_emb are float32
                 hidden = self.actor.net(fused)
                 action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
             else:
@@ -125,7 +125,6 @@ class Brain:
 
         if len(self.buffer) < self.warmup:
             return 0, 0, {}
-
         batch, indices, weights = self.buffer.sample(self.batch)
         weights = weights.to(self.device)
 
@@ -138,18 +137,19 @@ class Brain:
         joint_nexts  = torch.FloatTensor(np.array([t.joint_next   for t in batch])).to(self.device)
         dones        = torch.FloatTensor(np.array([t.done         for t in batch])).to(self.device)
         n_steps      = torch.FloatTensor(np.array([t.n            for t in batch])).to(self.device)
-
         # critic update
         with torch.no_grad():
             cam_next_emb   = self.target_encoder(cam_nexts)
             joint_next_emb = self.target_joint_mlp(joint_nexts)
             
             next_action, next_log_prob = self.actor(cam_next_emb, joint_next_emb,commands)
-            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, commands, next_action)
+            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, next_action, commands)
             q_next   = torch.min(q1_next, q2_next).squeeze(1)
             target_q = rewards + (self.gamma ** n_steps) * (1 - dones) * \
                     (q_next - self.alpha.detach() * next_log_prob)
-
+           
+            
+                
         cam_emb   = self.encoder(cam_states)
         joint_emb = self.joint_mlp(joint_states)
         q1, q2    = self.critic(cam_emb, joint_emb,  actions, commands)
@@ -160,7 +160,6 @@ class Brain:
             weights * F.mse_loss(q1, target_q, reduction="none")
             + weights * F.mse_loss(q2, target_q, reduction="none")
         ).mean()
-
         self.critic_optimiser.zero_grad()
         critic_loss.backward()
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -169,8 +168,7 @@ class Brain:
             + list(self.critic.parameters()), 10
         )
         self.critic_optimiser.step()
-        self.buffer.update_priorities(indices, td_errors)
-
+        #self.buffer.update_priorities(indices, td_errors)
         # actor update — encoder gradients stopped
         cam_emb_d   = cam_emb.detach()
         joint_emb_d = joint_emb.detach()
@@ -179,24 +177,31 @@ class Brain:
         q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, new_action, commands)
         q_new      = torch.min(q1_new, q2_new).squeeze(1)
         actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
-
         self.actor_optimiser.zero_grad()
         actor_loss.backward()
         actor_grad_norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)
         self.actor_optimiser.step()
-
         # entropy temperature update
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
         self.alpha_optimiser.zero_grad()
         alpha_loss.backward()
         self.alpha_optimiser.step()
-        
         # soft update
         self._soft_update(self.encoder,   self.target_encoder)
         self._soft_update(self.joint_mlp, self.target_joint_mlp)
         self._soft_update(self.critic,    self.critic_target)
 
-        n = len(self.buffer)
+        with torch.no_grad():
+            std_per_sample = self.actor.raw_std(cam_emb_d, joint_emb_d, commands)  # [B, ACTION_DIM]
+            std_per_sample_mean = std_per_sample.mean(dim=-1)
+
+        per_cmd_std_log = {}
+        for c in range(6):
+            
+            mask = commands == c
+            if mask.any():
+                per_cmd_std_log[f"train/action_std_cmd{c}"] = std_per_sample_mean[mask].mean().item()
+
         diagnostics = {
             "train/q1_mean":         q1.mean().item(),
             "train/q2_mean":         q2.mean().item(),
@@ -207,13 +212,10 @@ class Brain:
             "train/entropy":         -log_prob.mean().item(),
             "train/alpha_loss":      alpha_loss.item(),
             "train/action_mean":     new_action.mean().item(),
-            "train/action_std":      new_action.std().item(),
             "train/critic_grad_norm": critic_grad_norm.item(),
             "train/actor_grad_norm":  actor_grad_norm.item(),
-            "train/priority_mean":   float(self.buffer.priorities[:n].mean()),
-            "train/priority_max":    float(self.buffer.priorities[:n].max()),
+            **per_cmd_std_log
         }
-
         return critic_loss.item(), actor_loss.item(), diagnostics
  
     def _soft_update(self, source: nn.Module, target: nn.Module):
@@ -241,7 +243,6 @@ class Brain:
             "log_alpha":        self.log_alpha.detach().cpu(),
             "episode":      episode,
             "steps":        steps,
-            "norm_success": self.reward.state_dict(),
         }, os.path.join(path, f"manipulation_brain_{episode}.pth"))
  
     def load_checkpoint(self, path: str) -> tuple[int, int]:
@@ -287,6 +288,9 @@ class Actor(nn.Module):
         )
         self.mean_heads    = nn.ModuleList([nn.Linear(256, ACTION_DIM) for _ in range(6)])
         self.log_std_heads = nn.ModuleList([nn.Linear(256, ACTION_DIM) for _ in range(6)])
+        for head in self.log_std_heads:
+            nn.init.zeros_(head.weight)
+            nn.init.constant_(head.bias, np.log(0.35))
 
     def _select_head(self, all_outputs: torch.Tensor, command: torch.Tensor) -> torch.Tensor:
         
@@ -299,6 +303,14 @@ class Actor(nn.Module):
         all_means = torch.stack([h(hidden) for h in self.mean_heads], dim=1)
         mean = self._select_head(all_means, command)
         return torch.tanh(mean) * ACTION_SCALE
+
+    def raw_std(self, cam_emb, joint_emb, command: torch.Tensor) -> torch.Tensor:
+        """Deterministic per-sample std prediction — diagnostic only, no sampling noise."""
+        fused  = torch.cat([cam_emb, joint_emb], dim=1)
+        hidden = self.net(fused)
+        all_log_stds = torch.stack([h(hidden) for h in self.log_std_heads], dim=1)
+        log_std = self._select_head(all_log_stds, command).clamp(LOG_STD_MIN, LOG_STD_MAX)
+        return log_std.exp()
 
     def forward(self, cam_emb, joint_emb, command: torch.Tensor):
         fused  = torch.cat([cam_emb, joint_emb], dim=1)

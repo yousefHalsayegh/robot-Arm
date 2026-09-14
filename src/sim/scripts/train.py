@@ -66,7 +66,7 @@ CMD_NAMES = {
     CMD_HOME: "home"
 }
 
-
+UPDATED_COMMANDS = [c for c in ALL_COMMANDS if c != CMD_HOME]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 MAX_STAGE = len(STAGE_EPISODE_LENGTHS) - 1 
 
@@ -212,6 +212,7 @@ def training(args, env, simulation_app):
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
     command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS if c != CMD_HOME}
+    
 
     current_stage = 0
 
@@ -335,7 +336,7 @@ def training(args, env, simulation_app):
 
                         # update curriculum success buffer
                         cmd_i = int(commands[i])
-                        command_success_buf[cmd_i].append(success_i)
+                        command_success_buf.setdefault(cmd_i, deque(maxlen=WINDOW_SIZE)).append(success_i)
 
                         # check curriculum stage change
                         per_command_counts = {
@@ -344,7 +345,7 @@ def training(args, env, simulation_app):
                                 "successes": sum(command_success_buf[c]),
                                 "rate": sum(command_success_buf[c]) / max(len(command_success_buf[c]), 1),
                             }
-                            for c in ALL_COMMANDS if c != CMD_HOME
+                            for c in UPDATED_COMMANDS
                         }
                         per_command_log = {}
                         for c, counts in per_command_counts.items():
@@ -353,23 +354,25 @@ def training(args, env, simulation_app):
                             per_command_log[f"curriculum/{name}_successes"] = counts["successes"]
                             per_command_log[f"curriculum/{name}_rate"]      = counts["rate"]
 
-                        min_rate = min(per_command_counts[c]["rate"] for c in ALL_COMMANDS if c != CMD_HOME)
-                        if min_rate >= UPPER_THRESHOLD and current_stage < MAX_STAGE:
+                        all_buckets_full = all(per_command_counts[c]["attempts"] >= WINDOW_SIZE for c in UPDATED_COMMANDS)
+                        min_rate = min(per_command_counts[c]["rate"] for c in UPDATED_COMMANDS)
+
+                        if all_buckets_full and min_rate >= UPPER_THRESHOLD and current_stage < MAX_STAGE:
+                            print("test", flush=True)
                             current_stage += 1
-                            base_env.cfg.episode_length_s = \
-                                STAGE_EPISODE_LENGTHS[current_stage]
-                            # update event term randomisation range
                             _update_curriculum_stage(base_env, current_stage)
-                            print(f"curriculum advanced to stage {current_stage}",
-                                  flush=True)
-                        elif (1.0 - min_rate) >= LOWER_THRESHOLD \
-                                and current_stage > 0:
+                            for c in UPDATED_COMMANDS:
+                                command_success_buf[c].clear()
+                            print("test3", flush=True)
+                            
+                        elif all_buckets_full and (1.0 - min_rate) >= LOWER_THRESHOLD and current_stage > 0:
+                            print("test2", flush=True)
                             current_stage -= 1
-                            base_env.cfg.episode_length_s = \
-                                STAGE_EPISODE_LENGTHS[current_stage]
                             _update_curriculum_stage(base_env, current_stage)
-                            print(f"curriculum regressed to stage {current_stage}",
-                                  flush=True)
+                            for c in UPDATED_COMMANDS:
+                                command_success_buf[c].clear()
+                            print("test4", flush=True)
+                            
 
                         # wandb
                         if args.wandb:
@@ -384,7 +387,7 @@ def training(args, env, simulation_app):
                                 f"success_rate/{CMD_NAMES[c]}":
                                     sum(command_success_buf[c]) /
                                     max(len(command_success_buf[c]), 1)
-                                for c in ALL_COMMANDS if c != CMD_HOME
+                                for c in UPDATED_COMMANDS
                             }
                             joint_log = {
                                     f"joint_movement/env{i}/{name}": joint_delta_deg[j]
@@ -544,7 +547,7 @@ def training(args, env, simulation_app):
 
 def _update_curriculum_stage(base_env, stage: int):
     """Update event term randomisation range when stage changes."""
-    base_env.cfg.events.reset_controller.params.update({"pos_range": 0.00, "rot_range": 0.00})
+    base_env.cfg.episode_length_s = STAGE_EPISODE_LENGTHS[stage]
 
 
 def main():
