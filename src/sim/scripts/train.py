@@ -68,6 +68,7 @@ CMD_NAMES = {
 
 
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+MAX_STAGE = len(STAGE_EPISODE_LENGTHS) - 1 
 
 def profile_train_memory(brain, batch_sizes_to_test=[16, 32, 64, 128, 256]):
     for bs in batch_sizes_to_test:
@@ -210,7 +211,7 @@ def training(args, env, simulation_app):
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
-    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS}
+    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS if c != CMD_HOME}
 
     current_stage = 0
 
@@ -343,7 +344,7 @@ def training(args, env, simulation_app):
                                 "successes": sum(command_success_buf[c]),
                                 "rate": sum(command_success_buf[c]) / max(len(command_success_buf[c]), 1),
                             }
-                            for c in ALL_COMMANDS
+                            for c in ALL_COMMANDS if c != CMD_HOME
                         }
                         per_command_log = {}
                         for c, counts in per_command_counts.items():
@@ -352,8 +353,8 @@ def training(args, env, simulation_app):
                             per_command_log[f"curriculum/{name}_successes"] = counts["successes"]
                             per_command_log[f"curriculum/{name}_rate"]      = counts["rate"]
 
-                        min_rate = min(per_command_counts[c]["rate"] for c in ALL_COMMANDS)
-                        if min_rate >= UPPER_THRESHOLD and current_stage < 2:
+                        min_rate = min(per_command_counts[c]["rate"] for c in ALL_COMMANDS if c != CMD_HOME)
+                        if min_rate >= UPPER_THRESHOLD and current_stage < MAX_STAGE:
                             current_stage += 1
                             base_env.cfg.episode_length_s = \
                                 STAGE_EPISODE_LENGTHS[current_stage]
@@ -383,7 +384,7 @@ def training(args, env, simulation_app):
                                 f"success_rate/{CMD_NAMES[c]}":
                                     sum(command_success_buf[c]) /
                                     max(len(command_success_buf[c]), 1)
-                                for c in ALL_COMMANDS
+                                for c in ALL_COMMANDS if c != CMD_HOME
                             }
                             joint_log = {
                                     f"joint_movement/env{i}/{name}": joint_delta_deg[j]
@@ -543,13 +544,7 @@ def training(args, env, simulation_app):
 
 def _update_curriculum_stage(base_env, stage: int):
     """Update event term randomisation range when stage changes."""
-    stage_params = {
-        0: {"pos_range": 0.00, "rot_range": 0.00},
-        1: {"pos_range": 0.05, "rot_range": 0.05},
-        2: {"pos_range": 0.15, "rot_range": 0.15},
-    }
-    params = stage_params.get(stage, stage_params[0])
-    base_env.cfg.events.reset_controller.params.update(params)
+    base_env.cfg.events.reset_controller.params.update({"pos_range": 0.00, "rot_range": 0.00})
 
 
 def main():

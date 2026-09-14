@@ -75,7 +75,6 @@ def success_termination(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     commands = env.command_manager.get_command("joystick_cmd")
     object_art = env.scene["object"]
-    robot = env.scene["robot"]
     max_disp = _ensure_displacement_buffer(env)
 
     result = torch.zeros(env.num_envs, dtype=torch.bool,  device=env.device)
@@ -87,11 +86,7 @@ def success_termination(env: ManagerBasedRLEnv) -> torch.Tensor:
         tilt_deg = torch.rad2deg(object_art.data.joint_pos[i, [PIVOT_X_IDX, PIVOT_Y_IDX]])
         max_disp[i] = torch.maximum(max_disp[i], tilt_deg.abs().max())
 
-        if task == "home":
-            joint_pos = robot.data.joint_pos[i]
-            home_target = torch.tensor(POSITIONS["home"], device=env.device, dtype=joint_pos.dtype)
-            result[i] = torch.max(torch.abs(joint_pos - home_target)) < np.deg2rad(HOME_TOLERANCE_DEG)
-        elif task == "neutral":
+        if task == "neutral":
             registered = joystick_registered(object_art, i, task)
             result[i] = bool(registered) and bool(max_disp[i] > DISPLACEMENT_THRESHOLD_DEG)
         else:

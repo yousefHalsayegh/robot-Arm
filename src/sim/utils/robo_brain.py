@@ -30,15 +30,14 @@ class Brain:
         # shared encoder and joint mlp
         self.encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.joint_mlp = JointsNetwork(je).to(self.device)
-        self.command_net = CommandNetwork(command_embedding_size=16).to(self.device)
+
 
         # target encoder and joint mlp
         self.target_encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.target_joint_mlp = JointsNetwork(je).to(self.device)
-        self.target_command_net = CommandNetwork(command_embedding_size=16).to(self.device)
+
         self.target_encoder.load_state_dict(self.encoder.state_dict())
         self.target_joint_mlp.load_state_dict(self.joint_mlp.state_dict())
-        self.target_command_net.load_state_dict(self.command_net.state_dict())
 
         # actor
         self.actor = Actor(ce, je).to(self.device)
@@ -52,8 +51,7 @@ class Brain:
         self.critic_optimiser = torch.optim.Adam(
             list(self.encoder.parameters())
             + list(self.joint_mlp.parameters())
-            + list(self.critic.parameters())
-            + list(self.command_net.parameters()),
+            + list(self.critic.parameters()),
             lr=lr,
         )
         # actor optimiser does NOT include encoder or joint_mlp
@@ -88,14 +86,11 @@ class Brain:
 
             cam_emb   = self.encoder(cam_t).detach()
             joint_emb = self.joint_mlp(joint_t).detach()
-            cmd_emb   = self.command_net(cmd_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
-                hidden = self.actor.net(fused)
-                action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
+                action = self.actor.deterministic_action(cam_emb, joint_emb, cmd_t)
             else:
-                action, _ = self.actor(cam_emb, joint_emb, cmd_emb)
+                action, _ = self.actor(cam_emb, joint_emb, cmd_t)
         return action.squeeze(0).cpu().numpy()
 
     def predict_next_action_batch(
@@ -116,14 +111,13 @@ class Brain:
 
             cam_emb   = self.encoder(cam_t).detach()
             joint_emb = self.joint_mlp(joint_t).detach()
-            cmd_emb   = self.command_net(cmd_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
+                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)
                 hidden = self.actor.net(fused)
                 action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
             else:
-                action, _ = self.actor(cam_emb, joint_emb, cmd_emb)
+                action, _ = self.actor(cam_emb, joint_emb, cmd_t)
 
         return action.cpu().numpy()   # [N, action_dim]
  
@@ -149,18 +143,16 @@ class Brain:
         with torch.no_grad():
             cam_next_emb   = self.target_encoder(cam_nexts)
             joint_next_emb = self.target_joint_mlp(joint_nexts)
-            cmd_emb_target = self.command_net(commands)
-
-            next_action, next_log_prob = self.actor(cam_next_emb, joint_next_emb,cmd_emb_target)
-            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, cmd_emb_target, next_action)
+            
+            next_action, next_log_prob = self.actor(cam_next_emb, joint_next_emb,commands)
+            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, commands, next_action)
             q_next   = torch.min(q1_next, q2_next).squeeze(1)
             target_q = rewards + (self.gamma ** n_steps) * (1 - dones) * \
                     (q_next - self.alpha.detach() * next_log_prob)
 
         cam_emb   = self.encoder(cam_states)
         joint_emb = self.joint_mlp(joint_states)
-        cmd_emb   = self.command_net(commands)
-        q1, q2    = self.critic(cam_emb, joint_emb, cmd_emb, actions)
+        q1, q2    = self.critic(cam_emb, joint_emb,  actions, commands)
         q1, q2    = q1.squeeze(1), q2.squeeze(1)
 
         td_errors   = (target_q - q1).detach().cpu().numpy()
@@ -174,7 +166,6 @@ class Brain:
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
             list(self.encoder.parameters())
             + list(self.joint_mlp.parameters())
-            + list(self.command_net.parameters())
             + list(self.critic.parameters()), 10
         )
         self.critic_optimiser.step()
@@ -183,10 +174,9 @@ class Brain:
         # actor update — encoder gradients stopped
         cam_emb_d   = cam_emb.detach()
         joint_emb_d = joint_emb.detach()
-        cmd_emb_d   = cmd_emb.detach()
 
-        new_action, log_prob = self.actor(cam_emb_d, joint_emb_d, cmd_emb_d)
-        q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, cmd_emb_d, new_action)
+        new_action, log_prob = self.actor(cam_emb_d, joint_emb_d, commands)
+        q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, new_action, commands)
         q_new      = torch.min(q1_new, q2_new).squeeze(1)
         actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
 
@@ -240,7 +230,6 @@ class Brain:
         torch.save({
             "encoder":          self.encoder.state_dict(),
             "joint_mlp":        self.joint_mlp.state_dict(),
-            "command_net":      self.command_net.state_dict(),
             "target_encoder":   self.target_encoder.state_dict(),
             "target_joint_mlp": self.target_joint_mlp.state_dict(),
             "actor":            self.actor.state_dict(),
@@ -289,32 +278,44 @@ class Brain:
 # ADD Actor
 class Actor(nn.Module):
 
-    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64, command_embedding_size=16):
+    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64):
         super().__init__()
-        fused_size = cam_embedding_size + joint_embedding_size + command_embedding_size
+        fused_size = cam_embedding_size + joint_embedding_size
         self.net   = nn.Sequential(
             nn.Linear(fused_size, 512), nn.ReLU(),
             nn.Linear(512, 256),        nn.ReLU(),
         )
-        self.mean_head    = nn.Linear(256, ACTION_DIM)
-        self.log_std_head = nn.Linear(256, ACTION_DIM)
-        nn.init.zeros_(self.log_std_head.weight)
-        nn.init.constant_(self.log_std_head.bias, np.log(0.35)) 
+        self.mean_heads    = nn.ModuleList([nn.Linear(256, ACTION_DIM) for _ in range(6)])
+        self.log_std_heads = nn.ModuleList([nn.Linear(256, ACTION_DIM) for _ in range(6)])
 
-    def forward(self, cam_emb, joint_emb, cmd_emb):
-        fused   = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
-        hidden  = self.net(fused)
-        mean    = self.mean_head(hidden)
-        log_std = self.log_std_head(hidden).clamp(LOG_STD_MIN, LOG_STD_MAX)
-        std     = log_std.exp()
-        dist    = torch.distributions.Normal(mean, std)
-        x_t     = dist.rsample()
-        tanh_x  = torch.tanh(x_t)
-        action  = tanh_x * ACTION_SCALE
+    def _select_head(self, all_outputs: torch.Tensor, command: torch.Tensor) -> torch.Tensor:
+        
+        idx = command.view(-1, 1, 1).expand(-1, 1, ACTION_DIM)
+        return all_outputs.gather(1, idx).squeeze(1)
+
+    def deterministic_action(self, cam_emb, joint_emb, command: torch.Tensor) -> torch.Tensor:
+        fused  = torch.cat([cam_emb, joint_emb], dim=1)
+        hidden = self.net(fused)
+        all_means = torch.stack([h(hidden) for h in self.mean_heads], dim=1)
+        mean = self._select_head(all_means, command)
+        return torch.tanh(mean) * ACTION_SCALE
+
+    def forward(self, cam_emb, joint_emb, command: torch.Tensor):
+        fused  = torch.cat([cam_emb, joint_emb], dim=1)
+        hidden = self.net(fused)
+
+        all_means    = torch.stack([h(hidden) for h in self.mean_heads], dim=1)
+        all_log_stds = torch.stack([h(hidden) for h in self.log_std_heads], dim=1)
+        mean    = self._select_head(all_means, command)
+        log_std = self._select_head(all_log_stds, command).clamp(LOG_STD_MIN, LOG_STD_MAX)
+
+        std    = log_std.exp()
+        dist   = torch.distributions.Normal(mean, std)
+        x_t    = dist.rsample()
+        tanh_x = torch.tanh(x_t)
+        action = tanh_x * ACTION_SCALE
 
         tanh_x_safe = tanh_x.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-
-
         log_prob = dist.log_prob(x_t) - torch.log(ACTION_SCALE * (1 - tanh_x_safe.pow(2)) + 1e-6)
         log_prob = log_prob.sum(dim=-1)
         return action, log_prob
@@ -322,23 +323,25 @@ class Actor(nn.Module):
 
 # ADD Critic
 class Critic(nn.Module):
-    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64, command_embedding_size=16):
+    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64):
         super().__init__()
-        fused_size = cam_embedding_size + joint_embedding_size + command_embedding_size + ACTION_DIM
-        self.q1 = nn.Sequential(
-            nn.Linear(fused_size, 512), nn.ReLU(),
-            nn.Linear(512, 256),        nn.ReLU(),
-            nn.Linear(256, 1),
-        )
-        self.q2 = nn.Sequential(
-            nn.Linear(fused_size, 512), nn.ReLU(),
-            nn.Linear(512, 256),        nn.ReLU(),
-            nn.Linear(256, 1),
-        )
+        fused_size = cam_embedding_size + joint_embedding_size  + ACTION_DIM
+        self.q1_body = nn.Sequential(nn.Linear(fused_size, 512), nn.ReLU(), nn.Linear(512, 256), nn.ReLU())
+        self.q2_body = nn.Sequential(nn.Linear(fused_size, 512), nn.ReLU(), nn.Linear(512, 256), nn.ReLU())
+        self.q1_heads = nn.ModuleList([nn.Linear(256, 1) for _ in range(6)])
+        self.q2_heads = nn.ModuleList([nn.Linear(256, 1) for _ in range(6)])
 
-    def forward(self, cam_emb, joint_emb,cmd_emb, action):
-        fused = torch.cat([cam_emb, joint_emb,cmd_emb, action], dim=1)
-        return self.q1(fused), self.q2(fused)
+    def forward(self, cam_emb, joint_emb, action, command: torch.Tensor):
+        fused = torch.cat([cam_emb, joint_emb, action], dim=1)
+        h1, h2 = self.q1_body(fused), self.q2_body(fused)
+
+        all_q1 = torch.stack([h(h1) for h in self.q1_heads], dim=1)  
+        all_q2 = torch.stack([h(h2) for h in self.q2_heads], dim=1)
+
+        idx = command.view(-1, 1, 1)
+        q1 = all_q1.gather(1, idx).squeeze(1)
+        q2 = all_q2.gather(1, idx).squeeze(1)
+        return q1, q2
 
 class JointsNetwork(nn.Module):
 
@@ -418,14 +421,6 @@ class CameraNetwork(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.embed_head(self.backbone(x))
 
-#used to learn the commands
-class CommandNetwork(nn.Module):
-    def __init__(self, command_embedding_size: int = 16):
-        super().__init__()
-        self.embed = nn.Embedding(6, command_embedding_size)
-
-    def forward(self, cmd_idx: torch.Tensor) -> torch.Tensor:
-        return self.embed(cmd_idx)
 
 class ReplayBuffer:
     """

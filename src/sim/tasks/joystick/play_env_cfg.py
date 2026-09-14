@@ -133,6 +133,7 @@ class JoystickCommandTerm(CommandTerm):
             dtype=torch.long,
             device=self.device,
         )
+        sampled[sampled == CMD_HOME] = CMD_NEUTRAL
         self._command[env_ids] = sampled
 
     def _update_command(self):
