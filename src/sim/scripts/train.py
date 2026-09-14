@@ -160,52 +160,52 @@ def training(args, env, simulation_app):
     # ── frame stacks — one per env ────────────────────────────────────────────
     frame_stacks = [Frames(n=3) for _ in range(N)]
     steps_counter = [0]
-    if os.path.exists(args.prefill_path):
-        with open(args.prefill_path, "rb") as f:
-            brain.buffer = pickle.load(f)
-        if len(brain.buffer) > args.capacity: 
-            print("the loaded pre-filled buffer is larger than the passed capacity, either use a smaller buffer or create a new one")
-            return
-        elif brain.buffer.capacity != args.capacity:
-            print(f"fix the capcity from {brain.buffer.capacity} to {args.capacity}")
-            brain.buffer.capacity = args.capacity
+    # if os.path.exists(args.prefill_path):
+    #     with open(args.prefill_path, "rb") as f:
+    #         brain.buffer = pickle.load(f)
+    #     if len(brain.buffer) > args.capacity: 
+    #         print("the loaded pre-filled buffer is larger than the passed capacity, either use a smaller buffer or create a new one")
+    #         return
+    #     elif brain.buffer.capacity != args.capacity:
+    #         print(f"fix the capcity from {brain.buffer.capacity} to {args.capacity}")
+    #         brain.buffer.capacity = args.capacity
 
-        print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
-        brain.load_checkpoint(f"runs/LowLevel-pretrain/Checkpoints/manipulation_brain_0.pth")
-    else:
-        print(f"no prefill buffer found at {args.prefill_path} — generating one now")
+    #     print(f"loaded pre-filled buffer: {len(brain.buffer)} transitions")
+    #     brain.load_checkpoint(f"runs/LowLevel-pretrain/Checkpoints/manipulation_brain_0.pth")
+    # else:
+    #     print(f"no prefill buffer found at {args.prefill_path} — generating one now")
 
-        prefill_frame_stacks = [Frames(n=3)]   # single-env, matches fill_buffer's own assumption
-        update_frame_stack(base_env, prefill_frame_stacks, reset_ids=[0])
+    #     prefill_frame_stacks = [Frames(n=3)]   # single-env, matches fill_buffer's own assumption
+    #     update_frame_stack(base_env, prefill_frame_stacks, reset_ids=[0])
 
-        if args.lerobot_repo_id:
-            convert_lerobot_to_buffer(
-                base_env, prefill_frame_stacks, brain.buffer,
-                repo_id=args.lerobot_repo_id,
-                device=device,
-                simulation_app=simulation_app,
-                decision_steps=DECISION_STEPS,        # reuse train.py's own constant, not a re-declared one
-                action_scale=np.deg2rad(args.action_scale_deg),
-                gamma=brain.gamma,
-            )
+    #     if args.lerobot_repo_id:
+    #         convert_lerobot_to_buffer(
+    #             base_env, prefill_frame_stacks, brain.buffer,
+    #             repo_id=args.lerobot_repo_id,
+    #             device=device,
+    #             simulation_app=simulation_app,
+    #             decision_steps=DECISION_STEPS,        # reuse train.py's own constant, not a re-declared one
+    #             action_scale=np.deg2rad(args.action_scale_deg),
+    #             gamma=brain.gamma,
+    #         )
 
-        generate_synthetic_transitions(
-            base_env, prefill_frame_stacks, brain.buffer,
-            n_per_command=args.synthetic_per_cmd,
-            decision_steps=DECISION_STEPS,
-            action_scale=np.deg2rad(args.action_scale_deg),
-            gamma=brain.gamma,
-            device=device,
-            simulation_app=simulation_app,
-            brain=brain,
-            steps_counter=steps_counter,
-            args_wandb=args.wandb,
-            export_lerobot=args.export_lerobot,
-        )
+    #     generate_synthetic_transitions(
+    #         base_env, prefill_frame_stacks, brain.buffer,
+    #         n_per_command=args.synthetic_per_cmd,
+    #         decision_steps=DECISION_STEPS,
+    #         action_scale=np.deg2rad(args.action_scale_deg),
+    #         gamma=brain.gamma,
+    #         device=device,
+    #         simulation_app=simulation_app,
+    #         brain=brain,
+    #         steps_counter=steps_counter,
+    #         args_wandb=args.wandb,
+    #         export_lerobot=args.export_lerobot,
+    #     )
 
-        print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
-        with open(args.prefill_path, "wb") as f:
-            pickle.dump(brain.buffer, f)
+    #     print(f"generated prefill buffer: {len(brain.buffer)} transitions — saving to {args.prefill_path}")
+    #     with open(args.prefill_path, "wb") as f:
+    #         pickle.dump(brain.buffer, f)
 
 
     # ── curriculum success buffer ─────────────────────────────────────────────
@@ -243,8 +243,11 @@ def training(args, env, simulation_app):
 
     cam_decision   = cam_states.copy()
     joint_decision = joint_states.copy()
-
-    action_decision = brain.predict_next_action_batch(cam_states,  joint_states)
+    commands = base_env.command_manager.get_command(
+        "joystick_cmd"
+    ).cpu().numpy()   # [N] int
+    
+    action_decision = brain.predict_next_action_batch(cam_states,  joint_states, commands)
     prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
     try:
         with tqdm(total=args.episodes, initial=start_ep,
@@ -312,6 +315,7 @@ def training(args, env, simulation_app):
                         brain.buffer.push(
                             (cam_decision[i] * 255).round().astype(np.uint8),
                             joint_decision[i],
+                            commands[i],
                             actions[i].copy(),
                             segment_return[i],
                             (cam_next[i]* 255).round().astype(np.uint8),
@@ -437,13 +441,14 @@ def training(args, env, simulation_app):
                         episode_return[i] = 0
                         decision_steps[i]  = 0
                         segment_return[i] = 0.0
-                        action_decision[i] = brain.predict_next_action(cam_next[i], joint_next[i])
+                        action_decision[i] = brain.predict_next_action(cam_next[i], joint_next[i], commands[i])
 
                     elif decision_boundary:
 
                         brain.buffer.push(
                                     (cam_decision[i] * 255).round().astype(np.uint8),
                                     joint_decision[i],
+                                    commands[i],
                                     actions[i].copy(),
                                     segment_return[i],
                                     (cam_next[i]* 255).round().astype(np.uint8),
@@ -482,7 +487,7 @@ def training(args, env, simulation_app):
                         cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
                         action_decision[i] = brain.predict_next_action(
-                            cam_next[i], joint_next[i]
+                            cam_next[i], joint_next[i],commands[i]
                         )
                         decision_steps[i]  = 0
                         segment_return[i] = 0.0

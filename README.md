@@ -61,7 +61,7 @@ The implementation includes core deep-RL infrastructure such as:
 
 The current ALE implementation focuses on **Pong**.
 
-The game-playing RL policy was successfully trained during the project.
+The game-playing RL policy was successfully trained during the project. Behaviour under simulated actuator/reaction delay was compared against the Physical Atari benchmark (Keen Technologies), noting that the reference approach uses a simpler n-step DQN (not the full Rainbow combination) with a continuing, average-reward formulation and implicit action-history conditioning rather than an explicit delayed-neutral-action model.
 
 ### Soft Actor-Critic
 
@@ -82,6 +82,20 @@ The robot-control reward combines several objectives, including:
 - correct wrist-joint behaviour.
 
 The SAC robotic-control experiments were still under development at the end of the project and did not reach the same level of successful policy training as the ALE Rainbow DQN experiments.
+
+#### Vision Encoder
+
+The camera observation encoder was reworked from an ImageNet-pretrained ResNet-18 backbone to a lightweight convolutional encoder trained from scratch (five strided conv layers with GroupNorm, ~440K parameters). BatchNorm was avoided in favour of GroupNorm, since BatchNorm's running statistics are sensitive to the non-stationary, mixture-of-past-policies input distribution produced by an off-policy replay buffer.
+
+The observation frame stack was reduced from 4 to 3 frames, and the resolution consumed by the policy/replay buffer was decoupled from the simulated camera's native render resolution: the `CameraCfg`/`TiledCameraCfg` sensor still renders at the same resolution used to match the physical camera's optics, while a resize step downsamples the copy that is stored in the replay buffer and fed to the network (128×128). This significantly reduced the per-transition memory footprint without changing the simulated camera's field of view or optics.
+
+The per-environment `CameraCfg` sensor was also migrated to `TiledCameraCfg`, which batches all environments' camera output into a single render pass and scales substantially better with environment count than one render call per environment.
+
+#### Replay Buffer
+
+The replay buffer capacity was found to be a limiting factor: with a small, fixed-capacity FIFO buffer, rare successful transitions were being evicted before the policy had consolidated them, and buffer capacity was constrained primarily by the memory footprint of storing full-resolution camera frames per transition. Reducing the stored observation resolution and frame-stack size (above) freed enough memory headroom to substantially increase buffer capacity within the same hardware budget.
+
+Diagnostic analysis of a training run also identified an initialization issue in the entropy-tuning mechanism: the policy's action standard deviation was initializing near a value where the tanh-squashed Gaussian's differential entropy is locally flat (a peak in entropy vs. std), leaving the automatic temperature (`alpha`) with little useful gradient to move the policy toward the intended target entropy. This is being addressed by initializing the policy's log-std away from that flat region.
 
 ### Imitation Learning
 
@@ -355,24 +369,8 @@ Le Lay, Louis and Bay, Muammer
 Upstream repository: `MuammerBay/isaac_so_arm101`  
 License listed in the upstream citation metadata: BSD-3-Clause
 
-This repository should be described as **based on** that project rather than as an entirely independent implementation.
 
-## Current Limitations
 
-- The SAC robot-control policy was not fully successful at the end of the project.
-- Clean-machine installation has not yet been validated.
-- Exact host GPU / CUDA / driver setup is not currently documented.
-- SmolVLA was investigated but dropped because it was too slow for the intended control loop.
-- Generalisation to unseen interfaces remains a research objective rather than a fully demonstrated result.
-- Public W&B plots and experiment dashboards are intentionally omitted.
-
-## Intended Audience
-
-This repository is intended for:
-
-- robotics and reinforcement-learning researchers;
-- students exploring Isaac Lab, LeRobot, and robot learning;
-- recruiters or engineers reviewing the technical scope of the MSc project.
 
 ## License
 

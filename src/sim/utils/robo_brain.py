@@ -10,7 +10,7 @@ import torchvision.models as models
 
 import ale.config as config
 
-Transition = namedtuple('Transition', ['camera_state', 'joint_state', 'action', 'reward', 'camera_next', 'joint_next', 'done', 'n'])
+Transition = namedtuple('Transition', ['camera_state', 'joint_state', 'command', 'action', 'reward', 'camera_next', 'joint_next', 'done', 'n'])
 
 ACTION_DIM   = 6
 ACTION_SCALE = np.deg2rad(5.0)
@@ -30,12 +30,15 @@ class Brain:
         # shared encoder and joint mlp
         self.encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.joint_mlp = JointsNetwork(je).to(self.device)
+        self.command_net = CommandNetwork(command_embedding_size=16).to(self.device)
 
         # target encoder and joint mlp
         self.target_encoder   = CameraNetwork(cam_embedding_size=ce).to(self.device)
         self.target_joint_mlp = JointsNetwork(je).to(self.device)
+        self.target_command_net = CommandNetwork(command_embedding_size=16).to(self.device)
         self.target_encoder.load_state_dict(self.encoder.state_dict())
         self.target_joint_mlp.load_state_dict(self.joint_mlp.state_dict())
+        self.target_command_net.load_state_dict(self.command_net.state_dict())
 
         # actor
         self.actor = Actor(ce, je).to(self.device)
@@ -49,7 +52,8 @@ class Brain:
         self.critic_optimiser = torch.optim.Adam(
             list(self.encoder.parameters())
             + list(self.joint_mlp.parameters())
-            + list(self.critic.parameters()),
+            + list(self.critic.parameters())
+            + list(self.command_net.parameters()),
             lr=lr,
         )
         # actor optimiser does NOT include encoder or joint_mlp
@@ -63,7 +67,7 @@ class Brain:
         self.alpha_optimiser = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.buffer       = ReplayBuffer(c)
-        self.reward = RunningNormaliser()
+        self.reward = 0
         # self.success_count = 0
         # self.min_successes_before_decay = 10  
         # self.alpha_floor = 0.01
@@ -74,25 +78,31 @@ class Brain:
         self,
         camera_state: np.ndarray,   # [16, 224, 224]
         joint_state:  np.ndarray,   # [6]
+        command: int,
         deterministic:    bool = False,
     ) -> np.ndarray:
         with torch.no_grad():
             cam_t   = torch.FloatTensor(camera_state).unsqueeze(0).to(self.device)
             joint_t = torch.FloatTensor(joint_state).unsqueeze(0).to(self.device)
+            cmd_t   = torch.LongTensor([command]).to(self.device)
+
             cam_emb   = self.encoder(cam_t).detach()
             joint_emb = self.joint_mlp(joint_t).detach()
+            cmd_emb   = self.command_net(cmd_t).detach()
+
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb], dim=1)
+                fused  = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
                 hidden = self.actor.net(fused)
                 action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
             else:
-                action, _ = self.actor(cam_emb, joint_emb)
+                action, _ = self.actor(cam_emb, joint_emb, cmd_emb)
         return action.squeeze(0).cpu().numpy()
 
     def predict_next_action_batch(
     self,
     camera_states: np.ndarray,   # [N, 16, 224, 224]
     joint_states:  np.ndarray,   # [N, 6]
+    commands: np.ndarray,
     deterministic: bool = False,
     ) -> np.ndarray:
         """
@@ -102,16 +112,18 @@ class Brain:
         with torch.no_grad():
             cam_t   = torch.FloatTensor(camera_states).to(self.device)   # [N, 16, 224, 224]
             joint_t = torch.FloatTensor(joint_states).to(self.device)    # [N, 6]
+            cmd_t   = torch.LongTensor(commands).to(self.device)
 
             cam_emb   = self.encoder(cam_t).detach()
             joint_emb = self.joint_mlp(joint_t).detach()
+            cmd_emb   = self.command_net(cmd_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb], dim=1)
+                fused  = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
                 hidden = self.actor.net(fused)
                 action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE
             else:
-                action, _ = self.actor(cam_emb, joint_emb)
+                action, _ = self.actor(cam_emb, joint_emb, cmd_emb)
 
         return action.cpu().numpy()   # [N, action_dim]
  
@@ -125,6 +137,7 @@ class Brain:
 
         cam_states   = torch.FloatTensor(np.array([(t.camera_state.astype(np.float32) / 255.0) for t in batch])).to(self.device)
         joint_states = torch.FloatTensor(np.array([t.joint_state  for t in batch])).to(self.device)
+        commands     = torch.LongTensor(np.array([t.command       for t in batch])).to(self.device)
         actions      = torch.FloatTensor(np.array([t.action       for t in batch])).to(self.device)
         rewards      = torch.FloatTensor(np.array([t.reward       for t in batch])).to(self.device)
         cam_nexts    = torch.FloatTensor(np.array([(t.camera_next.astype(np.float32) / 255.0) for t in batch])).to(self.device)
@@ -136,15 +149,18 @@ class Brain:
         with torch.no_grad():
             cam_next_emb   = self.target_encoder(cam_nexts)
             joint_next_emb = self.target_joint_mlp(joint_nexts)
-            next_action, next_log_prob = self.actor(cam_next_emb, joint_next_emb)
-            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, next_action)
+            cmd_emb_target = self.command_net(commands)
+
+            next_action, next_log_prob = self.actor(cam_next_emb, joint_next_emb,cmd_emb_target)
+            q1_next, q2_next = self.critic_target(cam_next_emb, joint_next_emb, cmd_emb_target, next_action)
             q_next   = torch.min(q1_next, q2_next).squeeze(1)
             target_q = rewards + (self.gamma ** n_steps) * (1 - dones) * \
                     (q_next - self.alpha.detach() * next_log_prob)
 
         cam_emb   = self.encoder(cam_states)
         joint_emb = self.joint_mlp(joint_states)
-        q1, q2    = self.critic(cam_emb, joint_emb, actions)
+        cmd_emb   = self.command_net(commands)
+        q1, q2    = self.critic(cam_emb, joint_emb, cmd_emb, actions)
         q1, q2    = q1.squeeze(1), q2.squeeze(1)
 
         td_errors   = (target_q - q1).detach().cpu().numpy()
@@ -158,6 +174,7 @@ class Brain:
         critic_grad_norm = torch.nn.utils.clip_grad_norm_(
             list(self.encoder.parameters())
             + list(self.joint_mlp.parameters())
+            + list(self.command_net.parameters())
             + list(self.critic.parameters()), 10
         )
         self.critic_optimiser.step()
@@ -166,8 +183,10 @@ class Brain:
         # actor update — encoder gradients stopped
         cam_emb_d   = cam_emb.detach()
         joint_emb_d = joint_emb.detach()
-        new_action, log_prob = self.actor(cam_emb_d, joint_emb_d)
-        q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, new_action)
+        cmd_emb_d   = cmd_emb.detach()
+
+        new_action, log_prob = self.actor(cam_emb_d, joint_emb_d, cmd_emb_d)
+        q1_new, q2_new       = self.critic(cam_emb_d, joint_emb_d, cmd_emb_d, new_action)
         q_new      = torch.min(q1_new, q2_new).squeeze(1)
         actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
 
@@ -212,15 +231,16 @@ class Brain:
             tp.data.copy_(self.tau * sp.data + (1 - self.tau) * tp.data)
  
     def save_checkpoint(
-        self,
-        episode: int,
-        steps:   int,
-        path:    str,
+    self,
+    episode: int,
+    steps:   int,
+    path:    str,
     ):
         os.makedirs(path, exist_ok=True)
         torch.save({
             "encoder":          self.encoder.state_dict(),
             "joint_mlp":        self.joint_mlp.state_dict(),
+            "command_net":      self.command_net.state_dict(),
             "target_encoder":   self.target_encoder.state_dict(),
             "target_joint_mlp": self.target_joint_mlp.state_dict(),
             "actor":            self.actor.state_dict(),
@@ -246,6 +266,12 @@ class Brain:
         self.critic.load_state_dict(ckpt["critic"])
         self.critic_target.load_state_dict(ckpt["critic_target"])
 
+        if "command_net" in ckpt:
+            self.command_net.load_state_dict(ckpt["command_net"])
+        else:
+            print("[load_checkpoint] no 'command_net' in checkpoint — "
+                "leaving it at fresh initialization (pre-command-conditioning checkpoint).")
+
         self.critic_optimiser.load_state_dict(ckpt["critic_opt"])
         self.actor_optimiser.load_state_dict(ckpt["actor_opt"])
         self.alpha_optimiser.load_state_dict(ckpt["alpha_opt"])
@@ -263,18 +289,20 @@ class Brain:
 # ADD Actor
 class Actor(nn.Module):
 
-    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64):
+    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64, command_embedding_size=16):
         super().__init__()
-        fused_size = cam_embedding_size + joint_embedding_size
+        fused_size = cam_embedding_size + joint_embedding_size + command_embedding_size
         self.net   = nn.Sequential(
             nn.Linear(fused_size, 512), nn.ReLU(),
             nn.Linear(512, 256),        nn.ReLU(),
         )
         self.mean_head    = nn.Linear(256, ACTION_DIM)
         self.log_std_head = nn.Linear(256, ACTION_DIM)
+        nn.init.zeros_(self.log_std_head.weight)
+        nn.init.constant_(self.log_std_head.bias, np.log(0.35)) 
 
-    def forward(self, cam_emb, joint_emb):
-        fused   = torch.cat([cam_emb, joint_emb], dim=1)
+    def forward(self, cam_emb, joint_emb, cmd_emb):
+        fused   = torch.cat([cam_emb, joint_emb, cmd_emb], dim=1)
         hidden  = self.net(fused)
         mean    = self.mean_head(hidden)
         log_std = self.log_std_head(hidden).clamp(LOG_STD_MIN, LOG_STD_MAX)
@@ -294,9 +322,9 @@ class Actor(nn.Module):
 
 # ADD Critic
 class Critic(nn.Module):
-    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64):
+    def __init__(self, cam_embedding_size: int = 256, joint_embedding_size: int = 64, command_embedding_size=16):
         super().__init__()
-        fused_size = cam_embedding_size + joint_embedding_size + ACTION_DIM
+        fused_size = cam_embedding_size + joint_embedding_size + command_embedding_size + ACTION_DIM
         self.q1 = nn.Sequential(
             nn.Linear(fused_size, 512), nn.ReLU(),
             nn.Linear(512, 256),        nn.ReLU(),
@@ -308,8 +336,8 @@ class Critic(nn.Module):
             nn.Linear(256, 1),
         )
 
-    def forward(self, cam_emb, joint_emb, action):
-        fused = torch.cat([cam_emb, joint_emb, action], dim=1)
+    def forward(self, cam_emb, joint_emb,cmd_emb, action):
+        fused = torch.cat([cam_emb, joint_emb,cmd_emb, action], dim=1)
         return self.q1(fused), self.q2(fused)
 
 class JointsNetwork(nn.Module):
@@ -390,44 +418,14 @@ class CameraNetwork(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.embed_head(self.backbone(x))
 
+#used to learn the commands
+class CommandNetwork(nn.Module):
+    def __init__(self, command_embedding_size: int = 16):
+        super().__init__()
+        self.embed = nn.Embedding(6, command_embedding_size)
 
-class RunningNormaliser:
-    #un used might need to use it later as a test 
-
-    def __init__(self, epsilon = 1e-8):
-        
-        self.mean = 0
-        self.var = 0.0
-        self.count = 0
-
-        self.epsilon = epsilon
-
-
-    def update(self, value):
-        self.count += 1
-
-        delta = value - self.mean
-        self.mean += delta/self.count
-        self.var = self.var + delta * (value - self.mean)
-
-    def normalise(self, value):
-        std = np.sqrt(self.var/ max(self.count,1)) + self.epsilon
-        norm = value/std
-        print(norm)
-        return np.clip(norm, -1, 1)
-    
-
-    def state_dict(self):
-        return{
-            "mean" : self.mean,
-            "var" : self.var,
-            "count" : self.count 
-        }
-    
-    def load_state_dict(self, d):
-        self.mean = d["mean"]
-        self.var = d["var"]
-        self.count = d["count"]
+    def forward(self, cmd_idx: torch.Tensor) -> torch.Tensor:
+        return self.embed(cmd_idx)
 
 class ReplayBuffer:
     """
