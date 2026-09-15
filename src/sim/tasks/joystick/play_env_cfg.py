@@ -41,7 +41,8 @@ STICK_DEFAULT_POS = [0.305, -0.058, 0.0]
 STICK_DEFAULT_ROT = [0.7071068, 0.0, 0.0, -0.7071068]
  
 # curriculum episode lengths — step down 0.5s per stage
-STAGE_EPISODE_LENGTHS = {0: 5.0, 1: 4.5, 2: 4.0, 3:3.5, 4:3.0, 5:2.5, 6:2.0, 7:1.5, 8:1.0}
+STAGE_EPISODE_LENGTHS = {0: 10.0, 1: 8.0, 2: 6.0, 3:4.0, 4:3.0, 5:2.5, 6:2.0, 7:1.5, 8:1.0}
+STAGE_DECISION_STEPS = {0: 250.0, 1: 200.0, 2: 150.0, 3:100.0, 4:75.0, 5:62.0, 6:50.0, 7:37.0, 8:25.0}
  
 # curriculum thresholds
 UPPER_THRESHOLD = 0.80
@@ -49,8 +50,8 @@ LOWER_THRESHOLD = 0.50
 WINDOW_SIZE     = 100
  
 # discrete command integer codes — must match rewards.py
-CMD_NEUTRAL = 0
-CMD_UP      = 2
+CMD_NEUTRAL = 0 
+CMD_UP      = 2 
 CMD_DOWN    = 3
 CMD_LEFT    = 4
 CMD_RIGHT   = 5

@@ -16,13 +16,18 @@ parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
 parser.add_argument("--cam_embedding",   type=int, default=256)
 parser.add_argument("--joint_embedding", type=int, default=64)
-parser.add_argument("-ds", "--decision_steps", type=int, default=30)
 parser.add_argument("--lerobot_repo_id",   type=str, default=None)
 parser.add_argument("-spc", "--synthetic_per_cmd", type=int, default=100)
 parser.add_argument("--action_scale_deg",  type=float, default=5.0)
 parser.add_argument("--prefill_path",      type=str, default="buffer_prefill.pkl")
 parser.add_argument("--export_lerobot", default=True,
                     action=argparse.BooleanOptionalAction)
+parser.add_argument("--use_camera", default=True, action=argparse.BooleanOptionalAction)
+parser.add_argument("--multi_task", default=True, action=argparse.BooleanOptionalAction)
+parser.add_argument("--use_episode_curriculum", default=True, action=argparse.BooleanOptionalAction)
+parser.add_argument("--fixed_episode_length_s", type=float, default=10)
+parser.add_argument("--single_task_command", type=str, default="neutral",
+                     choices=["neutral", "up", "down", "left", "right"])
 
 
 AppLauncher.add_app_launcher_args(parser)
@@ -52,6 +57,7 @@ from sim.tasks.joystick.mdp.observations import (
 from sim.tasks.joystick.play_env_cfg import (
     ALL_COMMANDS, CMD_NEUTRAL, CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT, CMD_HOME,
     UPPER_THRESHOLD, LOWER_THRESHOLD, WINDOW_SIZE, STAGE_EPISODE_LENGTHS,
+    STAGE_DECISION_STEPS
 )
 
 
@@ -65,6 +71,7 @@ CMD_NAMES = {
     CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
     CMD_HOME: "home"
 }
+NAME_TO_CMD = {v: k for k, v in CMD_NAMES.items() if k != CMD_HOME}
 
 UPDATED_COMMANDS = [c for c in ALL_COMMANDS if c != CMD_HOME]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
@@ -124,19 +131,23 @@ def format_time(seconds: float) -> str:
 
 def training(args, env, simulation_app):
     N        = args.num_envs
-    DECISION_STEPS = args.decision_steps
+    current_decision_steps = STAGE_DECISION_STEPS[0]
     base_env = env.unwrapped
     device   = str(base_env.device)
 
+    base_env.cfg.episode_length_s = (
+        STAGE_EPISODE_LENGTHS[0] if args.use_episode_curriculum else args.fixed_episode_length_s
+    )
 
     # ── brain ─────────────────────────────────────────────────────────────────
     brain = Brain(
         ce   = args.cam_embedding,
         je = args.joint_embedding,
+        multi_task= args.multi_task,
+        use_camera= args.use_camera,
         c=args.capacity
     )
-    
-
+    CURRICULUM_COMMANDS = UPDATED_COMMANDS if args.multi_task else [0]
     steps, start_ep = 0, 0
     ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
     ckpt_path = f"{ckpt_dir}/manipulation_brain_{args.checkpoint}.pth"
@@ -159,8 +170,7 @@ def training(args, env, simulation_app):
         )
 
     # ── frame stacks — one per env ────────────────────────────────────────────
-    frame_stacks = [Frames(n=3) for _ in range(N)]
-    steps_counter = [0]
+    
     # if os.path.exists(args.prefill_path):
     #     with open(args.prefill_path, "rb") as f:
     #         brain.buffer = pickle.load(f)
@@ -211,7 +221,7 @@ def training(args, env, simulation_app):
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
-    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ALL_COMMANDS if c != CMD_HOME}
+    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in CURRICULUM_COMMANDS}
     
 
     current_stage = 0
@@ -236,33 +246,39 @@ def training(args, env, simulation_app):
     initialize_and_snapshot_home(base_env, device, simulation_app)
     obs, _ = env.reset()
 
+    if args.use_camera:
+        frame_stacks = [Frames(n=3) for _ in range(N)]
+        update_frame_stack(base_env, frame_stacks, reset_ids=list(range(N)))
+        cam_states = np.stack([fs._get_state() for fs in frame_stacks])
+    else:
+        cam_states = None
 
-    update_frame_stack(base_env, frame_stacks, reset_ids=list(range(N)))
-    
-
-    cam_states   = np.stack([fs._get_state() for fs in frame_stacks])
     joint_states = base_env.scene["robot"].data.joint_pos.cpu().numpy()
 
-    cam_decision   = cam_states.copy()
+    cam_decision   = None if cam_states is None else cam_states.copy()
     joint_decision = joint_states.copy()
-    commands = base_env.command_manager.get_command(
-        "joystick_cmd"
-    ).cpu().numpy()   # [N] int
-    
+
+    commands = base_env.command_manager.get_command("joystick_cmd").cpu().numpy()
+    if not args.multi_task:
+        fixed_cmd = NAME_TO_CMD[args.single_task_command]
+        base_env.command_manager.get_term("joystick_cmd")._command[:] = fixed_cmd   # real env task, pinned
+        commands = np.zeros((N,), dtype=commands.dtype)                              # network always sees head 0
+    else:
+        commands = base_env.command_manager.get_command("joystick_cmd").cpu().numpy()
+        
     action_decision = brain.predict_next_action_batch(cam_states,  joint_states, commands)
     prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
+
+    single_task_cmd_name = args.single_task_command if not args.multi_task else None
+    DUMMY_CAM = np.zeros((1, 1, 1), dtype=np.uint8)  
+
     try:
         with tqdm(total=args.episodes, initial=start_ep,
                   desc="LowLevel Training", unit="ep") as pbar:
-
             while episode < args.episodes:
                 start = time.time()
 
-                # ── read current commands from Isaac Lab command manager ───────
-                commands = base_env.command_manager.get_command(
-                    "joystick_cmd"
-                ).cpu().numpy()   # [N] int
-
+                
                 # ── action selection via ManipulationBrain ────────────────────
                 actions = action_decision.copy()
 
@@ -281,11 +297,12 @@ def training(args, env, simulation_app):
                 # ── update frame stacks ───────────────────────────────────────
                 reset_ids = torch.where(dones)[0].cpu().tolist()
 
-                update_frame_stack(base_env, frame_stacks,
-                                    reset_ids=reset_ids if reset_ids else None)
-
-
-                cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
+                if cam_states is None:
+                    cam_next = None
+                else:
+                    update_frame_stack(base_env, frame_stacks,
+                                        reset_ids=reset_ids if reset_ids else None)
+                    cam_next   = np.stack([fs._get_state() for fs in frame_stacks])
                 joint_next = base_env.scene["robot"].data.joint_pos.cpu().numpy()
                 # quick check, anywhere in the step loop
                 
@@ -308,19 +325,19 @@ def training(args, env, simulation_app):
                     episode_return[i] += (brain.gamma ** (episode_steps[i] -1)) * clipped_reward
                     segment_return[i] += (brain.gamma ** (decision_steps[i] - 1)) * clipped_reward
 
-                    decision_boundary = (decision_steps[i] >= DECISION_STEPS)
+                    decision_boundary = (decision_steps[i] >= current_decision_steps)
                     
                     
                         
                     if episode_ended:
                         # push to buffer
                         brain.buffer.push(
-                            (cam_decision[i] * 255).round().astype(np.uint8),
+                            DUMMY_CAM if not args.use_camera else (cam_decision[i] * 255).round().astype(np.uint8),
                             joint_decision[i],
                             commands[i],
                             actions[i].copy(),
                             segment_return[i],
-                            (cam_next[i]* 255).round().astype(np.uint8),
+                            DUMMY_CAM if not args.use_camera else (cam_next[i]* 255).round().astype(np.uint8),
                             joint_next[i],
                             float(success_i),
                             int(decision_steps[i]),
@@ -335,8 +352,9 @@ def training(args, env, simulation_app):
                         episode_time.append(ep_time)
 
                         # update curriculum success buffer
-                        cmd_i = int(commands[i])
-                        command_success_buf.setdefault(cmd_i, deque(maxlen=WINDOW_SIZE)).append(success_i)
+                        curriculum_cmd_i = NAME_TO_CMD[args.single_task_command] if not args.multi_task else int(commands[i])
+                        log_cmd_name = single_task_cmd_name if not args.multi_task else CMD_NAMES.get(curriculum_cmd_i, str(curriculum_cmd_i))
+                        command_success_buf.setdefault(curriculum_cmd_i, deque(maxlen=WINDOW_SIZE)).append(success_i)
 
                         # check curriculum stage change
                         per_command_counts = {
@@ -345,7 +363,7 @@ def training(args, env, simulation_app):
                                 "successes": sum(command_success_buf[c]),
                                 "rate": sum(command_success_buf[c]) / max(len(command_success_buf[c]), 1),
                             }
-                            for c in UPDATED_COMMANDS
+                            for c in CURRICULUM_COMMANDS
                         }
                         per_command_log = {}
                         for c, counts in per_command_counts.items():
@@ -354,24 +372,22 @@ def training(args, env, simulation_app):
                             per_command_log[f"curriculum/{name}_successes"] = counts["successes"]
                             per_command_log[f"curriculum/{name}_rate"]      = counts["rate"]
 
-                        all_buckets_full = all(per_command_counts[c]["attempts"] >= WINDOW_SIZE for c in UPDATED_COMMANDS)
-                        min_rate = min(per_command_counts[c]["rate"] for c in UPDATED_COMMANDS)
+                        all_buckets_full = all(per_command_counts[c]["attempts"] >= WINDOW_SIZE for c in CURRICULUM_COMMANDS)
+                        min_rate = min(per_command_counts[c]["rate"] for c in CURRICULUM_COMMANDS)
 
                         if all_buckets_full and min_rate >= UPPER_THRESHOLD and current_stage < MAX_STAGE:
-                            print("test", flush=True)
                             current_stage += 1
-                            _update_curriculum_stage(base_env, current_stage)
-                            for c in UPDATED_COMMANDS:
+                            _update_curriculum_stage(base_env, current_stage,  args.use_episode_curriculum, args.fixed_episode_length_s)
+                            current_decision_steps = STAGE_DECISION_STEPS[current_stage]
+                            for c in CURRICULUM_COMMANDS:
                                 command_success_buf[c].clear()
-                            print("test3", flush=True)
                             
                         elif all_buckets_full and (1.0 - min_rate) >= LOWER_THRESHOLD and current_stage > 0:
-                            print("test2", flush=True)
                             current_stage -= 1
-                            _update_curriculum_stage(base_env, current_stage)
-                            for c in UPDATED_COMMANDS:
+                            _update_curriculum_stage(base_env, current_stage,  args.use_episode_curriculum, args.fixed_episode_length_s)
+                            current_decision_steps = STAGE_DECISION_STEPS[current_stage]
+                            for c in CURRICULUM_COMMANDS:
                                 command_success_buf[c].clear()
-                            print("test4", flush=True)
                             
 
                         # wandb
@@ -387,7 +403,7 @@ def training(args, env, simulation_app):
                                 f"success_rate/{CMD_NAMES[c]}":
                                     sum(command_success_buf[c]) /
                                     max(len(command_success_buf[c]), 1)
-                                for c in UPDATED_COMMANDS
+                                for c in CURRICULUM_COMMANDS
                             }
                             joint_log = {
                                     f"joint_movement/env{i}/{name}": joint_delta_deg[j]
@@ -405,11 +421,12 @@ def training(args, env, simulation_app):
                                 "episode/timeout":       float(timeout_i),
                                 "episode/steps_taken":   episode_steps[i],
                                 "episode/episode_time_s": ep_time,
-                                "episode/command":       CMD_NAMES.get(cmd_i, str(cmd_i)),
+                                "episode/command":       log_cmd_name,
                                 "episode/episode":       episode,
                                 "curriculum/stage":      current_stage,
                                 "curriculum/min_rate":   min_rate,
                                 "curriculum/ep_length":  base_env.cfg.episode_length_s,
+                                "curriculum/decision_steps": current_decision_steps,
                                 **reward_term_log,
                                 **per_cmd_rates,
                                 **train_diagnostics,  
@@ -419,10 +436,12 @@ def training(args, env, simulation_app):
 
 
                         if episode % args.mid_save == 0 and episode != 0:
+    
                             brain.save_checkpoint(
                                 episode, steps,
                                 f"runs/LowLevel-{args.job_name}/Checkpoints"
                             )
+
                         
                         pbar.set_postfix({
                             "steps": steps, 
@@ -440,22 +459,26 @@ def training(args, env, simulation_app):
                         episode           += 1
 
                         # update decision state reference
-                        cam_decision[i]   = cam_next[i].copy()
+                        
+                        if cam_states is not None:
+                            cam_decision[i]   = cam_next[i].copy()
+
                         joint_decision[i] = joint_next[i].copy()
                         episode_return[i] = 0
                         decision_steps[i]  = 0
                         segment_return[i] = 0.0
-                        action_decision[i] = brain.predict_next_action(cam_next[i], joint_next[i], commands[i])
+                        action_decision[i] = brain.predict_next_action(
+                            None if cam_next is None else cam_next[i], joint_next[i], commands[i]
+                        )
 
                     elif decision_boundary:
-
                         brain.buffer.push(
-                                    (cam_decision[i] * 255).round().astype(np.uint8),
+                                    DUMMY_CAM if not args.use_camera else (cam_decision[i] * 255).round().astype(np.uint8),
                                     joint_decision[i],
                                     commands[i],
                                     actions[i].copy(),
                                     segment_return[i],
-                                    (cam_next[i]* 255).round().astype(np.uint8),
+                                    DUMMY_CAM if  not args.use_camera else (cam_next[i]* 255).round().astype(np.uint8),
                                     joint_next[i],
                                     0,
                                     decision_steps[i],
@@ -488,17 +511,22 @@ def training(args, env, simulation_app):
                                 **reward_term_log,
                                 **train_diagnostics,  
                             }, step=steps)
-                        cam_decision[i]   = cam_next[i].copy()
+
+                        if cam_states is not None:
+                            cam_decision[i]   = cam_next[i].copy()
                         joint_decision[i] = joint_next[i].copy()
+
                         action_decision[i] = brain.predict_next_action(
-                            cam_next[i], joint_next[i],commands[i]
+                            None if cam_next is None else cam_next[i], joint_next[i], commands[i]
                         )
+
                         decision_steps[i]  = 0
                         segment_return[i] = 0.0
                         
 
                 # update states for next step
-                cam_states   = cam_next
+                if cam_states is not None:
+                    cam_states   = cam_next
                 joint_states = joint_next
                     
 
@@ -545,9 +573,12 @@ def training(args, env, simulation_app):
     )
 
 
-def _update_curriculum_stage(base_env, stage: int):
+def _update_curriculum_stage(base_env, stage: int, use_episode_curriculum: bool, fixed_episode_length_s: float):
     """Update event term randomisation range when stage changes."""
-    base_env.cfg.episode_length_s = STAGE_EPISODE_LENGTHS[stage]
+    base_env.cfg.episode_length_s = (
+        STAGE_EPISODE_LENGTHS[stage] if use_episode_curriculum else fixed_episode_length_s
+    )
+    
 
 
 def main():
@@ -559,6 +590,9 @@ def main():
         num_envs=args_cli.num_envs,
         use_fabric=not args_cli.disable_fabric,
     )
+
+    if not args_cli.use_camera:
+        env_cfg.scene.side = None 
     env = gym.make(args_cli.task, cfg=env_cfg)
 
     env.unwrapped.sim.step()

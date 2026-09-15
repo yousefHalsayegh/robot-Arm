@@ -15,7 +15,7 @@ PIVOT_X_IDX = 0 #up and down
 
 #Helper Functions
 
-ZONE_TO_ACT = {"up": 2, "down": 3, "left": 4, "right": 5, "neutral": 0, "home": 1}
+ZONE_TO_ACT = {"up": 2, "down": 3, "left": 4, "right": 5, "neutral": 0, "home": 1} #changed for single task
 ACT_TO_ZONE = {v: k for k, v in ZONE_TO_ACT.items()}
 
 
@@ -25,9 +25,9 @@ DEADZONE_DEG = 6.5
 PIVOT_Y_IDX = 1
 PIVOT_X_IDX = 0
 
-CMD_NEUTRAL = 0
-CMD_UP      = 2
-CMD_DOWN    = 3
+CMD_NEUTRAL = 0 
+CMD_UP      = 2 
+CMD_DOWN    = 3 
 CMD_LEFT    = 4
 CMD_RIGHT   = 5
 CMD_HOME    = 1
