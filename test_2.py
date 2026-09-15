@@ -2,7 +2,7 @@ import wandb
 import pandas as pd
 
 api = wandb.Api()
-run = api.run("/models-imperial-college-london6785/RL for Games/runs/fqv1o7t7")
+run = api.run("/models-imperial-college-london6785/RL for Games/runs/m1cm0dma")
 
 # ── Run metadata — context for interpreting the metrics themselves ──────────
 print("=== Run config (hyperparameters) ===")
