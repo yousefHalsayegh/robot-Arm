@@ -32,17 +32,26 @@ def reset_or_restore_on_failure(env, env_ids):
     progress_buf[env_ids] = 0.0
 
     succeeded = env.termination_manager.get_term("success")[env_ids]
-    failed_ids = env_ids[~succeeded]
 
-    if len(failed_ids) > 0:
+    single_task_mode = getattr(env, "single_task_mode", False)
+    if single_task_mode:
+        ids_to_reset = env_ids
+    else:
+        ids_to_reset = env_ids[~succeeded]
+
+    if len(ids_to_reset) > 0:
         robot = env.scene["robot"]
         obj = env.scene["object"]
-        n = len(failed_ids)
+        n = len(ids_to_reset)
+
         home_target = torch.tensor(
             POSITIONS["home"], device=env.device, dtype=robot.data.joint_pos.dtype
         ).unsqueeze(0).repeat(n, 1)
 
-        robot.set_joint_position_target(home_target, env_ids=failed_ids)
+        zero_vel = torch.zeros_like(home_target)
+        robot.write_joint_state_to_sim(home_target, zero_vel, env_ids=ids_to_reset)
+
+        robot.set_joint_position_target(home_target, env_ids=ids_to_reset)
         robot.write_data_to_sim()
 
         stick_pos_local = torch.tensor(
@@ -51,11 +60,11 @@ def reset_or_restore_on_failure(env, env_ids):
         stick_rot = torch.tensor(
             STICK_DEFAULT_ROT, device=env.device, dtype=obj.data.root_quat_w.dtype
         )
-        stick_world_pos = stick_pos_local.unsqueeze(0) + env.scene.env_origins[failed_ids]
-        stick_rot_batch = stick_rot.unsqueeze(0).repeat(n, 1)   
+        stick_world_pos = stick_pos_local.unsqueeze(0) + env.scene.env_origins[ids_to_reset]
+        stick_rot_batch = stick_rot.unsqueeze(0).repeat(n, 1)
         stick_pose = torch.cat([stick_world_pos, stick_rot_batch], dim=-1)
 
-        obj.write_root_pose_to_sim(stick_pose, env_ids=failed_ids)
+        obj.write_root_pose_to_sim(stick_pose, env_ids=ids_to_reset)
 
 def _ensure_displacement_buffer(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Lazily create the per-env joystick-displacement tracker."""

@@ -19,11 +19,10 @@ LOG_STD_MAX  = 2
 
 class Brain:
     
-    def __init__(self,ce=256, je=64, use_camera=True, multi_task=True, lr=config.LEARNING_RATE, wp=config.WARMUP, b=config.BATCH, g=config.GAMMA, tau=config.TAU,c=config.CAPACITY):
+    def __init__(self,ce=256, je=64, use_camera=True,num_commands=6, lr=config.LEARNING_RATE, wp=config.WARMUP, b=config.BATCH, g=config.GAMMA, tau=config.TAU,c=config.CAPACITY):
 
 
         self.use_camera = use_camera
-        num_commands = 6 if multi_task else 1
         cam_dim = ce if use_camera else 0
 
 

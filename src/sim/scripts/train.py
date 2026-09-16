@@ -28,6 +28,9 @@ parser.add_argument("--use_episode_curriculum", default=True, action=argparse.Bo
 parser.add_argument("--fixed_episode_length_s", type=float, default=10)
 parser.add_argument("--single_task_command", type=str, default="neutral",
                      choices=["neutral", "up", "down", "left", "right"])
+parser.add_argument("--task_subset", type=str, default=None,
+                     help="comma-separated subset of commands to train on, e.g. 'up,down'. "
+                          "Defaults to all live commands when --multi_task, ignored when single-task.")
 
 
 AppLauncher.add_app_launcher_args(parser)
@@ -71,7 +74,7 @@ CMD_NAMES = {
     CMD_DOWN: "down", CMD_LEFT: "left", CMD_RIGHT: "right",
     CMD_HOME: "home"
 }
-NAME_TO_CMD = {v: k for k, v in CMD_NAMES.items() if k != CMD_HOME}
+
 
 UPDATED_COMMANDS = [c for c in ALL_COMMANDS if c != CMD_HOME]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
@@ -128,26 +131,50 @@ def format_time(seconds: float) -> str:
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+def read_commands(base_env, args, NAME_TO_CMD, CMD_TO_HEAD_IDX, N):
+    
+    real = base_env.command_manager.get_command("joystick_cmd").cpu().numpy()
+
+    if not args.multi_task:
+        fixed_cmd = NAME_TO_CMD[args.single_task_command]
+        base_env.command_manager.get_term("joystick_cmd")._command[:] = fixed_cmd
+        real = np.full((N,), fixed_cmd, dtype=real.dtype)
+        net = np.zeros((N,), dtype=np.int64)
+    else:
+        net = np.array([CMD_TO_HEAD_IDX[c] for c in real.tolist()], dtype=np.int64)
+    return real, net
 
 def training(args, env, simulation_app):
     N        = args.num_envs
     current_decision_steps = STAGE_DECISION_STEPS[0]
     base_env = env.unwrapped
     device   = str(base_env.device)
-
+    base_env.single_task_mode = not args.multi_task
     base_env.cfg.episode_length_s = (
         STAGE_EPISODE_LENGTHS[0] if args.use_episode_curriculum else args.fixed_episode_length_s
     )
+    NAME_TO_CMD = {v: k for k, v in CMD_NAMES.items() if k != CMD_HOME}
+
+    if args.multi_task:
+            if args.task_subset:
+                ACTIVE_COMMANDS = [NAME_TO_CMD[n.strip()] for n in args.task_subset.split(",")]
+            else:
+                ACTIVE_COMMANDS = UPDATED_COMMANDS   # all 5 live commands, existing default behavior
+    else:
+        ACTIVE_COMMANDS = [NAME_TO_CMD[args.single_task_command]]
+    CMD_TO_HEAD_IDX = {real_cmd: idx for idx, real_cmd in enumerate(ACTIVE_COMMANDS)}
+    
+
 
     # ── brain ─────────────────────────────────────────────────────────────────
     brain = Brain(
         ce   = args.cam_embedding,
         je = args.joint_embedding,
-        multi_task= args.multi_task,
         use_camera= args.use_camera,
-        c=args.capacity
+        c=args.capacity,
+        num_commands=len(ACTIVE_COMMANDS)
     )
-    CURRICULUM_COMMANDS = UPDATED_COMMANDS if args.multi_task else [0]
+
     steps, start_ep = 0, 0
     ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
     ckpt_path = f"{ckpt_dir}/manipulation_brain_{args.checkpoint}.pth"
@@ -221,7 +248,7 @@ def training(args, env, simulation_app):
 
     # ── curriculum success buffer ─────────────────────────────────────────────
     # passed to curriculum term so Isaac Lab can compute min success rate
-    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in CURRICULUM_COMMANDS}
+    
     
 
     current_stage = 0
@@ -244,7 +271,12 @@ def training(args, env, simulation_app):
 
     # ── initial reset ─────────────────────────────────────────────────────────
     initialize_and_snapshot_home(base_env, device, simulation_app)
+    base_env.command_manager.get_term("joystick_cmd").sampling_pool = ACTIVE_COMMANDS
     obs, _ = env.reset()
+    
+    commands_real, commands = read_commands(base_env, args, NAME_TO_CMD, CMD_TO_HEAD_IDX, N)
+    
+    command_success_buf = {c: deque(maxlen=WINDOW_SIZE) for c in ACTIVE_COMMANDS}
 
     if args.use_camera:
         frame_stacks = [Frames(n=3) for _ in range(N)]
@@ -258,13 +290,7 @@ def training(args, env, simulation_app):
     cam_decision   = None if cam_states is None else cam_states.copy()
     joint_decision = joint_states.copy()
 
-    commands = base_env.command_manager.get_command("joystick_cmd").cpu().numpy()
-    if not args.multi_task:
-        fixed_cmd = NAME_TO_CMD[args.single_task_command]
-        base_env.command_manager.get_term("joystick_cmd")._command[:] = fixed_cmd   # real env task, pinned
-        commands = np.zeros((N,), dtype=commands.dtype)                              # network always sees head 0
-    else:
-        commands = base_env.command_manager.get_command("joystick_cmd").cpu().numpy()
+
         
     action_decision = brain.predict_next_action_batch(cam_states,  joint_states, commands)
     prev_joint_pos_deg = np.rad2deg(base_env.scene["robot"].data.joint_pos.cpu().numpy())
@@ -278,6 +304,7 @@ def training(args, env, simulation_app):
             while episode < args.episodes:
                 start = time.time()
 
+                commands_real, commands = read_commands(base_env, args, NAME_TO_CMD, CMD_TO_HEAD_IDX, N)
                 
                 # ── action selection via ManipulationBrain ────────────────────
                 actions = action_decision.copy()
@@ -352,18 +379,17 @@ def training(args, env, simulation_app):
                         episode_time.append(ep_time)
 
                         # update curriculum success buffer
-                        curriculum_cmd_i = NAME_TO_CMD[args.single_task_command] if not args.multi_task else int(commands[i])
-                        log_cmd_name = single_task_cmd_name if not args.multi_task else CMD_NAMES.get(curriculum_cmd_i, str(curriculum_cmd_i))
+                        curriculum_cmd_i = int(commands_real[i])                          # was the broken CMD_TO_HEAD_IDX[commands[i]] line
+                        log_cmd_name = CMD_NAMES.get(curriculum_cmd_i, str(curriculum_cmd_i))  # single_task_cmd_name variable no longer needed
                         command_success_buf.setdefault(curriculum_cmd_i, deque(maxlen=WINDOW_SIZE)).append(success_i)
 
-                        # check curriculum stage change
                         per_command_counts = {
                             c: {
                                 "attempts": len(command_success_buf[c]),
                                 "successes": sum(command_success_buf[c]),
                                 "rate": sum(command_success_buf[c]) / max(len(command_success_buf[c]), 1),
                             }
-                            for c in CURRICULUM_COMMANDS
+                            for c in ACTIVE_COMMANDS          # was `curriculum_commands` — the buggy N-length array
                         }
                         per_command_log = {}
                         for c, counts in per_command_counts.items():
@@ -372,21 +398,21 @@ def training(args, env, simulation_app):
                             per_command_log[f"curriculum/{name}_successes"] = counts["successes"]
                             per_command_log[f"curriculum/{name}_rate"]      = counts["rate"]
 
-                        all_buckets_full = all(per_command_counts[c]["attempts"] >= WINDOW_SIZE for c in CURRICULUM_COMMANDS)
-                        min_rate = min(per_command_counts[c]["rate"] for c in CURRICULUM_COMMANDS)
+                        all_buckets_full = all(per_command_counts[c]["attempts"] >= WINDOW_SIZE for c in ACTIVE_COMMANDS)
+                        min_rate = min(per_command_counts[c]["rate"] for c in ACTIVE_COMMANDS)
 
                         if all_buckets_full and min_rate >= UPPER_THRESHOLD and current_stage < MAX_STAGE:
                             current_stage += 1
                             _update_curriculum_stage(base_env, current_stage,  args.use_episode_curriculum, args.fixed_episode_length_s)
                             current_decision_steps = STAGE_DECISION_STEPS[current_stage]
-                            for c in CURRICULUM_COMMANDS:
+                            for c in ACTIVE_COMMANDS:
                                 command_success_buf[c].clear()
                             
                         elif all_buckets_full and (1.0 - min_rate) >= LOWER_THRESHOLD and current_stage > 0:
                             current_stage -= 1
                             _update_curriculum_stage(base_env, current_stage,  args.use_episode_curriculum, args.fixed_episode_length_s)
                             current_decision_steps = STAGE_DECISION_STEPS[current_stage]
-                            for c in CURRICULUM_COMMANDS:
+                            for c in ACTIVE_COMMANDS:
                                 command_success_buf[c].clear()
                             
 
@@ -403,7 +429,7 @@ def training(args, env, simulation_app):
                                 f"success_rate/{CMD_NAMES[c]}":
                                     sum(command_success_buf[c]) /
                                     max(len(command_success_buf[c]), 1)
-                                for c in CURRICULUM_COMMANDS
+                                for c in ACTIVE_COMMANDS
                             }
                             joint_log = {
                                     f"joint_movement/env{i}/{name}": joint_delta_deg[j]
@@ -600,7 +626,7 @@ def main():
 
     training(args_cli, env, simulation_app)
     env.close()
-
+    return 0 
 
 if __name__ == "__main__":
     main()

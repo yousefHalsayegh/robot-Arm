@@ -126,14 +126,10 @@ class JoystickCommandTerm(CommandTerm):
 
     def __str__(self) -> str:
         return f"JoystickCommandTerm | envs: {self.num_envs}"
-    
+
     def _resample_command(self, env_ids: torch.Tensor):
-        """Sample a new random command for the given env indices."""
-        sampled = torch.tensor(
-            np.random.choice(ALL_COMMANDS, size=len(env_ids)),
-            dtype=torch.long,
-            device=self.device,
-        )
+        pool = getattr(self, "sampling_pool", ALL_COMMANDS)
+        sampled = torch.tensor(np.random.choice(pool, size=len(env_ids)), dtype=torch.long, device=self.device)
         sampled[sampled == CMD_HOME] = CMD_NEUTRAL
         self._command[env_ids] = sampled
 
