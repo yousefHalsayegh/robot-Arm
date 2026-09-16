@@ -2,10 +2,11 @@
 import yaml
 
 component_variants = {
-    "full":        {"dueling": True,  "noisy": True,  "nstep": 3},
-    "no_dueling":  {"dueling": False, "noisy": True,  "nstep": 3},
-    "no_noisy":    {"dueling": True,  "noisy": False, "nstep": 3},
-    "nstep1":      {"dueling": True,  "noisy": True,  "nstep": 1},
+    "full":                 {"dueling": True,  "noisy": True,  "distributional": True,  "nstep": 3},
+    "no_dueling":           {"dueling": False, "noisy": True,  "distributional": True,  "nstep": 3},
+    "no_noisy":             {"dueling": True,  "noisy": False, "distributional": True,  "nstep": 3},
+    "no_distributional":    {"dueling": True,  "noisy": True,  "distributional": False, "nstep": 3},
+    "nstep1":               {"dueling": True,  "noisy": True,  "distributional": True,  "nstep": 1},
 }
 
 combos = []

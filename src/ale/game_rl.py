@@ -67,6 +67,7 @@ def build_parser():
                         action=argparse.BooleanOptionalAction)
     parser.add_argument("-du", "--dueling", default=False, action=argparse.BooleanOptionalAction)
     parser.add_argument("-no", "--noisy", default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-dis", "--distributional", default=False, action=argparse.BooleanOptionalAction)
     parser.add_argument("-ns", "--nstep", type=int, default=1)
     parser.add_argument("-tu", "--target_update", choices=["soft", "hard"], default="soft")
     parser.add_argument("-tup", "--target_update_period", type=int, default=8000)
@@ -150,7 +151,7 @@ def training(args):
     env = gym.vector.SyncVectorEnv([env_init(42, i) for i in range(args.environment)])
     brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, 
                   args.eps_start, args.eps_decay, args.capacity, args.dueling, args.target_update, 
-                  args.target_update_period, args.noisy)
+                  args.target_update_period, args.noisy, args.distributional)
 
     if args.dry_run:
         torch.cuda.reset_peak_memory_stats()

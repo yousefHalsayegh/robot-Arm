@@ -38,7 +38,6 @@ def reset_or_restore_on_failure(env, env_ids):
         ids_to_reset = env_ids
     else:
         ids_to_reset = env_ids[~succeeded]
-
     if len(ids_to_reset) > 0:
         robot = env.scene["robot"]
         obj = env.scene["object"]

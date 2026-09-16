@@ -15,15 +15,20 @@ class Brain():
     The class used for the RL agent
     """
     #TODO change the parameters so that it takes from the config rather than this way
-    def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0, d=False, tu="soft", tup=8000, n=False):
+    def __init__(self, lr=0, wp=0, b=0, g=0, tau=0, ee=0, es=0, ed=0,c=0, d=False, tu="soft", tup=8000, n=False, distributional=False, n_atoms=51,
+             v_min=-1.0, v_max=1.0):
         
-        #initializing the policy network
-        self.policy = Network(dueling=d, noisy=n).to("cuda")
-        self.optimiser = optim.Adam(self.policy.parameters(), lr=lr, eps=1.5e-4)
-        self.loss_fn = nn.SmoothL1Loss(reduction='none')
+        self.distributional = distributional
+        self.n_atoms = n_atoms
+        self.v_min, self.v_max = v_min, v_max
 
-        #initializing the test network
-        self.test = Network(dueling=d, noisy=n).to("cuda")
+        self.policy = Network(dueling=d, noisy=n, distributional=distributional,
+                            n_atoms=n_atoms, v_min=v_min, v_max=v_max).to("cuda")
+        self.optimiser = optim.Adam(self.policy.parameters(), lr=lr, eps=1.5e-4)
+        self.loss_fn = nn.SmoothL1Loss(reduction='none')   # unused when distributional, kept for the scalar path
+
+        self.test = Network(dueling=d, noisy=n, distributional=distributional,
+                            n_atoms=n_atoms, v_min=v_min, v_max=v_max).to("cuda")
         self.test.eval()
 
         #parameters and the replay buffer
@@ -42,59 +47,74 @@ class Brain():
         self.train_steps = 0
 
         self.agent = ""
+
+
     def train(self):
-       """
-       Training the policy netwrok, given the collected observations
-       """
-        #The warmup to allow the buffer to collect data before training starts
-       if len(self.buffer) < self.warmup:
-           return 0, 0
-    
-        #sampling different observations from the collected data
-       batch, indices, weights = self.buffer.sample(self.batch)
-       states = torch.FloatTensor(np.array([t.state.astype(np.float32) / 255.0      for t in batch])).to("cuda")
-       actions = torch.LongTensor(np.array([t.action      for t in batch])).to("cuda")
-       rewards = torch.FloatTensor(np.array([t.reward      for t in batch])).to("cuda")
-       next_states = torch.FloatTensor(np.array([t.next_state.astype(np.float32) / 255.0      for t in batch])).to("cuda")
-       dones = torch.FloatTensor(np.array([t.done      for t in batch])).to("cuda")
-       steps = torch.FloatTensor(np.array([t.n      for t in batch])).to("cuda")
-       
-       #calculating the Q_Values of the collected states
-       q_values = self.policy(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-       self.q_value = q_values
-       with torch.no_grad():
-           #calculating the approximate next Q_values and the target
-           next_actions = self.policy(next_states).argmax(1, keepdim=True)
-           next_q = self.test(next_states).gather(1, next_actions).squeeze(1)
-           targets = rewards +(self.gamma**steps)* next_q * (1 - dones)
-        
-        
+        if len(self.buffer) < self.warmup:
+            return 0, 0
 
-        #calculating the loss and passing it backward
-       per_sample_loss = self.loss_fn(q_values, targets)
-       loss = (weights * per_sample_loss).mean()
-       td_errors = (targets - q_values).detach().cpu().numpy()
-       self.optimiser.zero_grad()
-       loss.backward()
-       grad_norm = sum(
-               p.grad.norm().item() ** 2
-               for p in self.policy.parameters()
-               if p.grad is not None
-               ) ** 0.5
-       torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
-       self.optimiser.step()
-       self.train_steps += 1
-       if self.target_update == "soft":
+        batch, indices, weights = self.buffer.sample(self.batch)
+        states = torch.FloatTensor(np.array([t.state.astype(np.float32) / 255.0 for t in batch])).to("cuda")
+        actions = torch.LongTensor(np.array([t.action for t in batch])).to("cuda")
+        rewards = torch.FloatTensor(np.array([t.reward for t in batch])).to("cuda")
+        next_states = torch.FloatTensor(np.array([t.next_state.astype(np.float32) / 255.0 for t in batch])).to("cuda")
+        dones = torch.FloatTensor(np.array([t.done for t in batch])).to("cuda")
+        steps = torch.FloatTensor(np.array([t.n for t in batch])).to("cuda")
+
+        if self.distributional:
+            n_atoms = self.n_atoms
+            support = self.policy.support
+
+            with torch.no_grad():
+                next_q_policy = self._q_values(self.policy, next_states)          
+                next_actions = next_q_policy.argmax(dim=1)
+
+                next_log_probs_target = self.test(next_states)
+                next_probs_target = next_log_probs_target.exp()
+                next_dist = next_probs_target.gather(
+                    1, next_actions.view(-1, 1, 1).expand(-1, 1, n_atoms)
+                ).squeeze(1)                                                       
+
+                gamma_n = self.gamma ** steps
+                target_dist = self.project_distribution(next_dist, rewards, dones, gamma_n,
+                                                    support, self.v_min, self.v_max, n_atoms)
+
+            log_probs = self.policy(states)
+            log_probs_a = log_probs.gather(
+                1, actions.view(-1, 1, 1).expand(-1, 1, n_atoms)
+            ).squeeze(1)                                                           
+
+            per_sample_loss = -(target_dist * log_probs_a).sum(dim=1)              
+            loss = (weights * per_sample_loss).mean()
+            td_errors = per_sample_loss.detach().cpu().numpy()                     
+            self.q_value = self._q_values(self.policy, states).gather(1, actions.unsqueeze(1)).squeeze(1)
+
+        else:
+            # --- original scalar path, unchanged ---
+            q_values = self.policy(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+            self.q_value = q_values
+            with torch.no_grad():
+                next_actions = self.policy(next_states).argmax(1, keepdim=True)
+                next_q = self.test(next_states).gather(1, next_actions).squeeze(1)
+                targets = rewards + (self.gamma ** steps) * next_q * (1 - dones)
+            per_sample_loss = self.loss_fn(q_values, targets)
+            loss = (weights * per_sample_loss).mean()
+            td_errors = (targets - q_values).detach().cpu().numpy()
+
+        self.optimiser.zero_grad()
+        loss.backward()
+        grad_norm = sum(p.grad.norm().item() ** 2 for p in self.policy.parameters() if p.grad is not None) ** 0.5
+        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
+        self.optimiser.step()
+        self.train_steps += 1
+
+        if self.target_update == "soft":
             self.soft_update()
-       elif self.train_steps % self.target_update_period == 0:
+        elif self.train_steps % self.target_update_period == 0:
             self.hard_update()
-       self.buffer.update_priorities(indices, td_errors)
 
-        #calculating the grad_norm for measuring the overall performace 
-       
-
-
-       return loss.item(), grad_norm
+        self.buffer.update_priorities(indices, td_errors)
+        return loss.item(), grad_norm
     
     def soft_update(self):
         """
@@ -121,7 +141,7 @@ class Brain():
 
         with torch.no_grad():
             state_t = torch.FloatTensor(state).to("cuda")
-            greedy_action = self.policy(state_t).argmax(dim=1).cpu().numpy()
+            greedy_action = self._q_values(self.policy, state_t).argmax(dim=1).cpu().numpy()
 
         random_mask = np.random.random(num_envs) < self.eps
         random_actions = env.action_space.sample()
@@ -165,7 +185,7 @@ class Brain():
         """
         with torch.no_grad():
             state_next = torch.FloatTensor(state).unsqueeze(0).to("cuda")
-            return self.policy(state_next).argmax(dim=1).item()
+            return self._q_values(self.policy, state_next).argmax(dim=1).item()
         
     def ball_position(self,obs):
         """
@@ -217,14 +237,43 @@ class Brain():
                 print("Please enter a number")
                 continue
 
-            
+    def project_distribution(next_probs, rewards, dones, gamma_n, support, v_min, v_max, n_atoms):
+        delta_z = (v_max - v_min) / (n_atoms - 1)
+        batch_size = rewards.shape[0]
 
+        Tz = rewards.unsqueeze(1) + gamma_n.unsqueeze(1) * support.unsqueeze(0) * (1 - dones.unsqueeze(1))
+        Tz = Tz.clamp(v_min, v_max)
+        b = (Tz - v_min) / delta_z
+        l = b.floor().long()
+        u = b.ceil().long()
+        l[(u > 0) & (l == u)] -= 1
+        u[(l < n_atoms - 1) & (l == u)] += 1
 
+        m = torch.zeros(batch_size, n_atoms, device=rewards.device)
+        offset = (torch.arange(batch_size, device=rewards.device) * n_atoms).unsqueeze(1).expand(batch_size, n_atoms)
+        m.view(-1).index_add_(0, (l + offset).view(-1), (next_probs * (u.float() - b)).view(-1))
+        m.view(-1).index_add_(0, (u + offset).view(-1), (next_probs * (b - l.float())).view(-1))
+        return m
+
+    
+    def _q_values(self, net, x):
+        out = net(x)
+        if self.distributional:
+            return (out.exp() * net.support).sum(dim=2)
+        return out
 
 class Network(nn.Module):
-    def __init__(self, n_actions=6, dueling=False, noisy=False):
+    def __init__(self, n_actions=6, dueling=False, noisy=False,
+                 distributional=False, n_atoms=51, v_min=-10.0, v_max=10.0):
         super().__init__()
         self.dueling = dueling
+        self.distributional = distributional
+        self.n_actions = n_actions
+        self.n_atoms = n_atoms if distributional else 1
+
+        if distributional:
+            self.register_buffer("support", torch.linspace(v_min, v_max, n_atoms))
+
         Linear = NoisyLinear if noisy else nn.Linear
         self.conv = nn.Sequential(
             nn.Conv2d(4, 32, 8, 4), nn.ReLU(),
@@ -233,18 +282,31 @@ class Network(nn.Module):
             nn.Flatten()
         )
         conv_out = 64 * 7 * 7
+        out_per_action = self.n_atoms 
+
         if dueling:
-            self.value = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, 1))
-            self.advantage = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions))
+            self.value = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, out_per_action))
+            self.advantage = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions * out_per_action))
         else:
-            self.fc = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions))
+            self.fc = nn.Sequential(Linear(conv_out, 512), nn.ReLU(), Linear(512, n_actions * out_per_action))
 
     def forward(self, x):
         feats = self.conv(x)
-        if self.dueling:
-            v, a = self.value(feats), self.advantage(feats)
-            return v + (a - a.mean(dim=1, keepdim=True))
-        return self.fc(feats)
+        B = x.shape[0]
+
+        if self.distributional:
+            if self.dueling:
+                v = self.value(feats).view(B, 1, self.n_atoms)
+                a = self.advantage(feats).view(B, self.n_actions, self.n_atoms)
+                logits = v + (a - a.mean(dim=1, keepdim=True))
+            else:
+                logits = self.fc(feats).view(B, self.n_actions, self.n_atoms)
+            return torch.log_softmax(logits, dim=2)   # [B, n_actions, n_atoms] log-probs
+        else:
+            if self.dueling:
+                v, a = self.value(feats), self.advantage(feats)
+                return v + (a - a.mean(dim=1, keepdim=True))
+            return self.fc(feats)
     
 class ReplayBuffer:
 
