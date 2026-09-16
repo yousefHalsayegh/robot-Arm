@@ -8,8 +8,8 @@ WARMUP = 1000
 GAMMA = 0.99
 TAU = 0.005
 SLOW = 0.067
-UPDATES = 1
-CAPACITY = 30000
+UPDATES = 16
+CAPACITY = 500000
 CHECKPOINT = ""
 ITERATION = 10
 
@@ -33,7 +33,7 @@ FULL_SAVE = 5000
 CROP = 68
 THRESHOLD = 0.15
 CENTER_Y = CROP / 2
-ENV = 4
+ENV = 1024
 CONTROLLER = {
     # Keep in mind this is on the X/Y trgger not DP and the values are for Pong
     ('ABS_Y', 0): 2,   # up 
