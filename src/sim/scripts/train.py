@@ -80,6 +80,17 @@ UPDATED_COMMANDS = [c for c in ALL_COMMANDS if c != CMD_HOME]
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
 MAX_STAGE = len(STAGE_EPISODE_LENGTHS) - 1 
 
+
+def print_final_success_rates(command_success_buf, active_commands):
+    """Prints one greppable line per active command's final success rate,
+    so an external script (the ablation sweep) can read it straight from
+    this run's own log file — no wandb API call needed."""
+    for c in active_commands:
+        name = CMD_NAMES.get(c, str(c))
+        buf = command_success_buf.get(c, [])
+        rate = (sum(buf) / len(buf)) if len(buf) > 0 else float("nan")
+        print(f"FINAL_SUCCESS_RATE|{name}|{rate}", flush=True)
+
 def profile_train_memory(brain, batch_sizes_to_test=[16, 32, 64, 128, 256]):
     for bs in batch_sizes_to_test:
         if len(brain.buffer) < bs:
@@ -561,6 +572,7 @@ def training(args, env, simulation_app):
 
     except KeyboardInterrupt:
         print("\nclosing")
+        print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
         if args.wandb:
             wandb.finish()
         env.close()
@@ -573,6 +585,7 @@ def training(args, env, simulation_app):
     except Exception as e:
         env.close()
         simulation_app.close()
+        print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
         import traceback
         crash = traceback.format_exc()
         print(f"\n[CRASH] {type(e).__name__}: {e}", flush=True)
@@ -597,6 +610,7 @@ def training(args, env, simulation_app):
         episode, steps,
         f"runs/LowLevel-{args.job_name}/Full"
     )
+    print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
 
 
 def _update_curriculum_stage(base_env, stage: int, use_episode_curriculum: bool, fixed_episode_length_s: float):

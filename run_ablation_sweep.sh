@@ -1,26 +1,20 @@
-#!/usr/bin/env bash
-#
-# Runs the full camera x curriculum x task ablation sweep (4 groups x 5 configs
-# = 20 runs), logs each run's wandb URL as it appears, and writes a summary
-# outline at the end.
-#
-# Fill in TASK / EPISODES / NUM_ENVS for your setup before running.
 
-set -uo pipefail   # NOT `set -e` — a single failed run must not kill the sweep
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Fixed settings — same across every run in the sweep, so the only variables
-# are camera / curriculum / task, matching the ablation ladder's intent.
-# ─────────────────────────────────────────────────────────────────────────────
-TASK="${TASK:-Player}"                 # e.g. Isaac-Joystick-Play-v0
-EPISODES="${EPISODES:-2500}"
-FIXED_EPISODE_LENGTH_S="${FIXED_EPISODE_LENGTH_S:-10.0}"   # used only when curriculum is off
+set -uo pipefail   
 
-# Camera runs need a much smaller env count than no-camera runs (per today's
-# VRAM/render-budget findings) — override either at invocation time, e.g.:
-#   NUM_ENVS_CAMERA=16 NUM_ENVS_NO_CAMERA=128 ./run_ablation_sweep.sh
-NUM_ENVS_CAMERA="${NUM_ENVS_CAMERA:-16}"
+TASK="${TASK:-Player}"                
+EPISODES="${EPISODES:-5000}"
+FIXED_EPISODE_LENGTH_S="${FIXED_EPISODE_LENGTH_S:-10.0}"   
+
+
+NUM_ENVS_CAMERA="${NUM_ENVS_CAMERA:-64}"
 NUM_ENVS_NO_CAMERA="${NUM_ENVS_NO_CAMERA:-1024}"
+
+
+RUN_TIMEOUT_S="${RUN_TIMEOUT_S:-7200}"
+
+
+SUCCESS_THRESHOLD="${SUCCESS_THRESHOLD:-0.8}"
 
 LOG_DIR="ablation_logs"
 SUMMARY_MD="ablation_summary.md"
@@ -33,54 +27,50 @@ echo "" >> "$SUMMARY_MD"
 echo "Started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$SUMMARY_MD"
 echo "" >> "$SUMMARY_MD"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config table: job_name  use_camera  use_curr  multi_task  single_cmd  task_subset  group_label
-# single_cmd is "-" when multi_task=true (not used in that case).
-# task_subset is "-" for the full command set, or a comma-separated list
-# (no spaces) like "left,up" to train on only that subset — only meaningful
-# when multi_task=true.
-# ─────────────────────────────────────────────────────────────────────────────
+
 CONFIGS=(
+  # job_name  use_camera  use_curr  multi_task  single_cmd  task_subset  prereqs  group_label
+
   # ---- No camera or Curr ----
-  "only_up_no_curr    false false false up    -       No camera or Curr"
-  "only_left_no_curr  false false false left  -       No camera or Curr"
-  "only_right_no_curr    false false false right    -       No camera or Curr"
-  "only_down_no_curr  false false false down  -       No camera or Curr"
-  "left_up_no_camera_or_curr    false false true  -     left,up  No camera or Curr"
-  "up_down_no_camera_or_curr    false false true  -     up,down  No camera or Curr"
-  "all_no_camera_or_curr    false false true  -     - No camera or Curr"
-  
+  "only_up_no_camera_or_curr    false false false up    -       -                                                                                    No camera or Curr"
+  "only_left_no_camera_or_curr  false false false left  -       -                                                                                    No camera or Curr"
+  "only_right_no_camera_or_curr false false false right -       -                                                                                    No camera or Curr"
+  "only_down_no_camera_or_curr  false false false down  -       -                                                                                    No camera or Curr"
+  "left_up_no_camera_or_curr    false false true  -     left,up only_left_no_camera_or_curr,only_up_no_camera_or_curr                                 No camera or Curr"
+  "up_down_no_camera_or_curr    false false true  -     up,down only_up_no_camera_or_curr,only_down_no_camera_or_curr                                 No camera or Curr"
+  "all_no_camera_or_curr        false false true  -     -       only_up_no_camera_or_curr,only_left_no_camera_or_curr,only_right_no_camera_or_curr,only_down_no_camera_or_curr  No camera or Curr"
 
   # ---- No Camera (curriculum ON) ----
-  "only_up_no_curr    false false false up    -       No camera or Curr"
-  "only_left_no_curr  false false false left  -       No camera or Curr"
-  "only_right_no_curr    false false false right    -       No camera or Curr"
-  "only_down_no_curr  false false false down  -       No camera or Curr"
-  "left_up_no_camera    false true true  -     left,up  No Camera"
-  "up_down_no_camera    false true true  -     up,down  No Camera"
-  "all_no_camera_or_curr    false false true  -     - No camera or Curr"
+  "only_up_no_camera    false true false up    -       -                                              No Camera"
+  "only_left_no_camera  false true false left  -       -                                              No Camera"
+  "only_right_no_camera false true false right -       -                                              No Camera"
+  "only_down_no_camera  false true false down  -       -                                              No Camera"
+  "left_up_no_camera    false true true  -     left,up only_left_no_camera,only_up_no_camera            No Camera"
+  "up_down_no_camera    false true true  -     up,down only_up_no_camera,only_down_no_camera            No Camera"
+  "all_no_camera        false true true  -     -       only_up_no_camera,only_left_no_camera,only_right_no_camera,only_down_no_camera  No Camera"
 
   # ---- No Curr (camera ON) ----
-  "only_up_no_curr    true false false up    -       No Curr"
-  "only_left_no_curr  true false false left  -       No Curr"
-  "left_up_no_camera    true false true  -     left,up  No Curr"
-  "up_down_no_camera    true false true  -     up,down  No Curr"
-  "all_no_curr         true false true  -     -       No Curr"
+  "only_up_no_curr    true false false up    -       -                                No Curr"
+  "only_left_no_curr  true false false left  -       -                                No Curr"
+  "left_up_no_curr    true false true  -     left,up only_left_no_curr,only_up_no_curr  No Curr"
+  "up_down_no_curr    true false true  -     up,down only_up_no_curr                    No Curr"
+  "all_no_curr         true false true  -     -       only_up_no_curr,only_left_no_curr  No Curr"
 
   # ---- All on (camera + curriculum) ----
-  "only_up_all_on    true true false up    -       All on"
-  "only_left_all_on  true true false left  -       All on"
-  "all_all_on         true true true  -     -       All on"
-  "left_up_all_on   true true true  -     left,up  Task subset"
-  "up_down_all_on   true true true  -     up,down  Task subset"
+  "only_up_all_on    true true false up    -       -                                All on"
+  "only_left_all_on  true true false left  -       -                                All on"
+  "all_all_on         true true true  -     -       only_up_all_on,only_left_all_on  All on"
 
-
+  # ---- Task subset (multi-task, restricted command set) ----
+  "left_up_all_on   true true true  -     left,up only_left_all_on,only_up_all_on  Task subset"
+  "up_down_all_on   true true true  -     up,down only_up_all_on                    Task subset"
 )
 
 CURRENT_GROUP=""
+declare -A SUCCESS_RATE   # job_name -> final success_rate captured from wandb (bash 4+ associative array)
 
 for entry in "${CONFIGS[@]}"; do
-  read -r JOB_NAME USE_CAMERA USE_CURR MULTI_TASK SINGLE_CMD TASK_SUBSET GROUP_LABEL <<< "$entry"
+  read -r JOB_NAME USE_CAMERA USE_CURR MULTI_TASK SINGLE_CMD TASK_SUBSET PREREQS GROUP_LABEL <<< "$entry"
 
   if [[ "$GROUP_LABEL" != "$CURRENT_GROUP" ]]; then
     CURRENT_GROUP="$GROUP_LABEL"
@@ -90,6 +80,32 @@ for entry in "${CONFIGS[@]}"; do
     echo "----------------------------------------"
     echo "GROUP: $GROUP_LABEL"
     echo "----------------------------------------"
+  fi
+
+  SKIP_REASON=""
+  if [[ "$PREREQS" != "-" ]]; then
+    IFS=',' read -ra PREREQ_LIST <<< "$PREREQS"
+    for prereq in "${PREREQ_LIST[@]}"; do
+      if [[ -n "${SUCCESS_RATE[$prereq]+x}" ]]; then
+        rate="${SUCCESS_RATE[$prereq]}"
+        below=$(awk -v r="$rate" -v t="$SUCCESS_THRESHOLD" 'BEGIN{print (r < t) ? 1 : 0}')
+        if [[ "$below" -eq 1 ]]; then
+          SKIP_REASON="prerequisite '$prereq' success_rate=$rate < threshold=$SUCCESS_THRESHOLD"
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [[ -n "$SKIP_REASON" ]]; then
+    echo ""
+    echo ">>> Skipping: $JOB_NAME  ($SKIP_REASON)"
+    {
+      echo "- **${JOB_NAME}** — SKIPPED"
+      echo "  - reason: ${SKIP_REASON}"
+      echo "  - camera=${USE_CAMERA}, curriculum=${USE_CURR}, multi_task=${MULTI_TASK}, single_cmd=${SINGLE_CMD}, task_subset=${TASK_SUBSET}"
+    } >> "$SUMMARY_MD"
+    continue
   fi
 
   CAM_FLAG="--use_camera";            [[ "$USE_CAMERA" == "false" ]] && CAM_FLAG="--no-use_camera"
@@ -113,9 +129,9 @@ for entry in "${CONFIGS[@]}"; do
 
   echo ""
   echo ">>> Running: $JOB_NAME"
-  echo "    num_envs=$RUN_NUM_ENVS  $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG"
+  echo "    num_envs=$RUN_NUM_ENVS  timeout=${RUN_TIMEOUT_S}s  $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG"
 
-  train \
+  timeout -k 60 "${RUN_TIMEOUT_S}s" train \
     --task="$TASK" \
     --enable_cameras \
     --headless \
@@ -132,7 +148,10 @@ for entry in "${CONFIGS[@]}"; do
   #   wandb: 🚀 View run at https://wandb.ai/<entity>/<project>/runs/<id>
   RUN_URL=$(grep -oE 'https://wandb\.ai/[^ ]+/runs/[^ ]+' "$LOG_FILE" | head -n 1)
 
-  if [[ "$RUN_EXIT" -ne 0 ]]; then
+
+  if [[ "$RUN_EXIT" -eq 124 ]]; then
+    STATUS="TIMED OUT after ${RUN_TIMEOUT_S}s (killed)"
+  elif [[ "$RUN_EXIT" -ne 0 ]]; then
     STATUS="FAILED (exit $RUN_EXIT)"
   else
     STATUS="completed"
@@ -144,6 +163,19 @@ for entry in "${CONFIGS[@]}"; do
 
   echo "    status: $STATUS"
   echo "    url:    $RUN_URL"
+
+
+  if [[ "$SINGLE_CMD" != "-" ]]; then
+    metric_value=$(grep "^FINAL_SUCCESS_RATE|${SINGLE_CMD}|" "$LOG_FILE" | tail -n 1 | awk -F'|' '{print $3}')
+
+    if [[ -n "$metric_value" && "$metric_value" != "nan" ]]; then
+      SUCCESS_RATE["$JOB_NAME"]="$metric_value"
+      echo "    captured success_rate/${SINGLE_CMD} = $metric_value  (for future prereq checks)"
+    else
+      echo "    [note] no FINAL_SUCCESS_RATE line found for '${SINGLE_CMD}' in $LOG_FILE — "
+      echo "           any later run depending on $JOB_NAME will treat this as inconclusive"
+    fi
+  fi
 
   {
     echo "- **${JOB_NAME}** — ${STATUS}"
