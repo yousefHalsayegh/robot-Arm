@@ -40,7 +40,7 @@ def build_parser():
     #The argumaents provided in the code
     parser = argparse.ArgumentParser("Training DQN for the Robot Arm")
     parser.add_argument("-env", "--environment", help="The amount of environment to run in sync for training the RL", type=int, default=config.ENV)
-    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default=str(random()))
+    parser.add_argument("-jn", "--job_name", help="Project name shown in wandb", type=str, default="default_test")
     parser.add_argument("-thld", "--threshold", help="The threshold distance between the paddle and the middle of the screen", type=float, default=config.THRESHOLD)
     parser.add_argument("-ep", "--episode", help="The amount of episodes to train for in total", type=int, default=config.EPISODES)
     parser.add_argument("-u", "--updates", help="Per episode how many times do we run the train method for the RL", type=int, default=config.UPDATES)
@@ -60,15 +60,15 @@ def build_parser():
     parser.add_argument("-tr", "--training", help="Toggle between training or eval", default=True, action=argparse.BooleanOptionalAction)
     parser.add_argument("-cam", "--camera", help="Toggle between using a camera or not", default=False, action=argparse.BooleanOptionalAction)
     parser.add_argument("-clip", "--clip_reward", help="Reward Clipping", default=True, action=argparse.BooleanOptionalAction)    
-    parser.add_argument("-ad", "--action_delay", help="Number of env steps to hold an action before selecting the next one (simulates robot arm actuation delay)", type=int, default=0)
+    parser.add_argument("-ad", "--action_delay", help="Number of env steps to hold an action before selecting the next one (simulates robot arm actuation delay)", type=int, default=3)
     parser.add_argument("-w",   "--wandb",         default=True,
                     action=argparse.BooleanOptionalAction)
     parser.add_argument("-p",   "--predict",         default=True,
                         action=argparse.BooleanOptionalAction)
-    parser.add_argument("-du", "--dueling", default=False, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-no", "--noisy", default=False, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-dis", "--distributional", default=False, action=argparse.BooleanOptionalAction)
-    parser.add_argument("-ns", "--nstep", type=int, default=1)
+    parser.add_argument("-du", "--dueling", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-no", "--noisy", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-dis", "--distributional", default=True, action=argparse.BooleanOptionalAction)
+    parser.add_argument("-ns", "--nstep", type=int, default=3)
     parser.add_argument("-tu", "--target_update", choices=["soft", "hard"], default="soft")
     parser.add_argument("-tup", "--target_update_period", type=int, default=8000)
     parser.add_argument("-dr", "--dry_run", type=int, default=0,

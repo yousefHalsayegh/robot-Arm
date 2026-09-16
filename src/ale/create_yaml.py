@@ -25,7 +25,7 @@ for reward_name, full_rewards in [("sparse", False), ("full", True)]:
 # ── Full cross: delay x component_variant x target_update x predict ──
 for delay in [1,3,5]:
     for variant_name, variant in component_variants.items():
-        for target_update in ["hard", "soft"]:
+        for target_update in ["soft"]:
             for predict in [False, True]:
                 combos.append({
                     "run_group": f"d{delay}_{variant_name}_{target_update}_{'pred' if predict else 'noPred'}",
@@ -42,7 +42,7 @@ sweep_config = {
     "metric": {"name": "episode/total_reward", "goal": "maximize"},
     "parameters": {
         "combo": {"values": combos},
-        "environment": {"value": 4},
+        "environment": {"value": 1024},
         "episode": {"value": 5000},
     },
 }
