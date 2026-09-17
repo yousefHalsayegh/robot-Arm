@@ -124,6 +124,7 @@ def env_init(seed, N):
     """
     Used to create multiple envs and preprocess the data
     """
+    
     def _init():
         env = gym.make("ALE/Pong-v5", frameskip=1)
         env = gym.wrappers.AtariPreprocessing(
@@ -136,6 +137,7 @@ def env_init(seed, N):
         )
         env = gym.wrappers.FrameStackObservation(env, stack_size=4)
         env.reset(seed=seed + N)
+       
         return env
     return _init
 
@@ -148,6 +150,7 @@ def training(args):
         args.predict = False
 
     #inital the environemt
+
     env = gym.vector.SyncVectorEnv([env_init(42, i) for i in range(args.environment)])
     brain = Brain(args.learning_rate,args.warmup, args.batch, args.gamma, args.tau, args.eps_end, 
                   args.eps_start, args.eps_decay, args.capacity, args.dueling, args.target_update, 

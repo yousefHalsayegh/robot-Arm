@@ -295,6 +295,6 @@ parameters:
       distributional: true
       nstep: 1
   environment:
-    value: 1024
+    value: 32
   episode:
-    value: 5000
+    value: 2500

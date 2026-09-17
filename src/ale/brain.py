@@ -54,12 +54,13 @@ class Brain():
             return 0, 0
 
         batch, indices, weights = self.buffer.sample(self.batch)
-        states = torch.FloatTensor(np.array([t.state.astype(np.float32) / 255.0 for t in batch])).to("cuda")
-        actions = torch.LongTensor(np.array([t.action for t in batch])).to("cuda")
-        rewards = torch.FloatTensor(np.array([t.reward for t in batch])).to("cuda")
-        next_states = torch.FloatTensor(np.array([t.next_state.astype(np.float32) / 255.0 for t in batch])).to("cuda")
-        dones = torch.FloatTensor(np.array([t.done for t in batch])).to("cuda")
-        steps = torch.FloatTensor(np.array([t.n for t in batch])).to("cuda")
+
+        states      = torch.from_numpy(batch["states"]).to("cuda").float().div_(255.0)
+        actions     = torch.from_numpy(batch["actions"]).to("cuda")
+        rewards     = torch.from_numpy(batch["rewards"]).to("cuda")
+        next_states = torch.from_numpy(batch["next_states"]).to("cuda").float().div_(255.0)
+        dones       = torch.from_numpy(batch["dones"]).to("cuda")
+        steps       = torch.from_numpy(batch["ns"]).to("cuda")
 
         if self.distributional:
             n_atoms = self.n_atoms
@@ -103,8 +104,7 @@ class Brain():
 
         self.optimiser.zero_grad()
         loss.backward()
-        grad_norm = sum(p.grad.norm().item() ** 2 for p in self.policy.parameters() if p.grad is not None) ** 0.5
-        torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10)
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 10).item()
         self.optimiser.step()
         self.train_steps += 1
 
@@ -237,7 +237,7 @@ class Brain():
                 print("Please enter a number")
                 continue
 
-    def project_distribution(next_probs, rewards, dones, gamma_n, support, v_min, v_max, n_atoms):
+    def project_distribution(self, next_probs, rewards, dones, gamma_n, support, v_min, v_max, n_atoms):
         delta_z = (v_max - v_min) / (n_atoms - 1)
         batch_size = rewards.shape[0]
 
@@ -310,51 +310,74 @@ class Network(nn.Module):
     
 class ReplayBuffer:
 
-    """
-    Used to save observations for the CNN and then sampled from for training purposes 
-    """
     def __init__(self, capacity, alpha=0.6, beta=0.4):
-        self.capacity  = int(capacity)
-        self.alpha     = alpha
-        self.beta      = beta
-        self.buffer    = []
-        self.priorities = np.zeros(int(capacity), dtype=np.float32)
-        self.pos       = 0
+        self.capacity = int(capacity)
+        self.alpha    = alpha
+        self.beta     = beta
+        self.pos      = 0
+        self.size     = 0         
+        self.priorities = np.zeros(self.capacity, dtype=np.float32)
 
-    def push(self, *args):
+        # Arrays are allocated lazily on the first push(), once we know the
+        # actual state shape — avoids hardcoding (4, 84, 84) here and needing
+        # every existing Brain(...) call site to be changed.
+        self._arrays_ready = False
+
+    def _allocate(self, state_shape, action, reward, done, n):
+        self.states      = np.zeros((self.capacity, *state_shape), dtype=np.uint8)
+        self.next_states = np.zeros((self.capacity, *state_shape), dtype=np.uint8)
+        self.actions     = np.zeros(self.capacity, dtype=np.int64)
+        self.rewards     = np.zeros(self.capacity, dtype=np.float32)
+        self.dones       = np.zeros(self.capacity, dtype=np.float32)
+        self.ns          = np.zeros(self.capacity, dtype=np.float32)
+        self._arrays_ready = True
+
+    def push(self, state, action, reward, next_state, done, n):
+        if not self._arrays_ready:
+            self._allocate(state.shape, action, reward, done, n)
+
         # new transitions get max priority so they are sampled at least once
-        max_priority = self.priorities.max() if self.buffer else 1.0
-        
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(Transition(*args))
-        else:
-            self.buffer[self.pos] = Transition(*args)
-        
+        max_priority = self.priorities[:self.size].max() if self.size > 0 else 1.0
+
+        self.states[self.pos]      = state
+        self.actions[self.pos]     = action
+        self.rewards[self.pos]     = reward
+        self.next_states[self.pos] = next_state
+        self.dones[self.pos]       = float(done)
+        self.ns[self.pos]          = n
+
         self.priorities[self.pos] = max_priority
-        self.pos = (self.pos + 1) % self.capacity
+        self.pos  = (self.pos + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size):
-        n           = len(self.buffer)
-        priorities  = self.priorities[:n]
-        probs       = priorities ** self.alpha
-        probs      /= probs.sum()
-        
-        indices     = np.random.choice(n, batch_size, replace=False, p=probs)
-        samples     = [self.buffer[i] for i in indices]
-        
+        n = self.size
+        priorities = self.priorities[:n]
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+
+        indices = np.random.choice(n, batch_size, replace=False, p=probs)
+
         # importance sampling weights — correct for sampling bias
-        weights     = (n * probs[indices]) ** (-self.beta)
-        weights    /= weights.max()
-        
-        return samples, indices, torch.FloatTensor(weights).to("cuda")
+        weights = (n * probs[indices]) ** (-self.beta)
+        weights /= weights.max()
+
+        batch = {
+            "states":      self.states[indices],       # already uint8 [B, 4, 84, 84]
+            "actions":     self.actions[indices],
+            "rewards":     self.rewards[indices],
+            "next_states": self.next_states[indices],
+            "dones":       self.dones[indices],
+            "ns":          self.ns[indices],
+        }
+        return batch, indices, torch.FloatTensor(weights).to("cuda")
 
     def update_priorities(self, indices, td_errors):
         """Call after train() with the computed TD errors."""
-        for i, err in zip(indices, td_errors):
-            self.priorities[i] = abs(err) + 1e-6   # small epsilon avoids zero priority
+        self.priorities[indices] = np.abs(td_errors) + 1e-6   # vectorized, was a Python for-loop
 
     def __len__(self):
-        return len(self.buffer)
+        return self.size
 
 class NoisyLinear(nn.Module):
     def __init__(self, in_f, out_f, sigma_init=0.5):
