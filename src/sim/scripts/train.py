@@ -31,6 +31,8 @@ parser.add_argument("--single_task_command", type=str, default="neutral",
 parser.add_argument("--task_subset", type=str, default=None,
                      help="comma-separated subset of commands to train on, e.g. 'up,down'. "
                           "Defaults to all live commands when --multi_task, ignored when single-task.")
+parser.add_argument("--wandb_resume_id", type=str, default="")
+parser.add_argument("--wandb_entity", type=str, default="")
 
 
 AppLauncher.add_app_launcher_args(parser)
@@ -187,12 +189,23 @@ def training(args, env, simulation_app):
     )
 
     steps, start_ep = 0, 0
+    resumed_wandb_id = None
     ckpt_dir  = f"runs/LowLevel-{args.job_name}/Checkpoints"
     ckpt_path = f"{ckpt_dir}/manipulation_brain_{args.checkpoint}.pth"
     print(ckpt_path)
     if args.checkpoint and os.path.exists(ckpt_path):
         steps, start_ep = brain.load_checkpoint(ckpt_path)
         print(f"loaded: {ckpt_path}")
+
+        if args.wandb and args.wandb_resume_id:
+            api = wandb.Api()
+            prior_run = api.run(f"{api.default_entity}/RL for Games/{args.wandb_resume_id}")
+            history = prior_run.history(keys=["train/steps"], pandas=True)
+            if not history.empty:
+                last_logged_step = int(history["train/steps"].max())
+                steps = max(steps, last_logged_step + 1)
+                print(f"resuming wandb logging from step {steps} (checkpoint had {steps}, "
+                    f"wandb's own last logged step was {last_logged_step})")
     else:
         os.makedirs(ckpt_dir, exist_ok=True)
         print("no checkpoint, starting fresh")
@@ -202,9 +215,11 @@ def training(args, env, simulation_app):
     if args.wandb:
         wandb.init(
             project="RL for Games",
+            entity=args.wandb_entity or None,
             name=f"LowLevel-{args.job_name}",
-            config={k: v for k, v in vars(args).items()
-                    if k not in {"job_name"}}
+            id=args.wandb_resume_id or None,
+            resume="allow" if args.wandb_resume_id else None,
+            config={k: v for k, v in vars(args).items() if k not in {"job_name"}},
         )
 
     # ── frame stacks — one per env ────────────────────────────────────────────
@@ -428,7 +443,7 @@ def training(args, env, simulation_app):
                             
 
                         # wandb
-                        if args.wandb:
+                        if args.wandb and len(brain.buffer) >= brain.warmup:
                             term_names = base_env.reward_manager._term_names
                             step_reward = base_env.reward_manager._step_reward[i]  # this env's row, all terms, this exact step
     
@@ -524,7 +539,7 @@ def training(args, env, simulation_app):
                         steps += 1 
 
                         critic_loss, actor_loss, train_diagnostics = brain.train()
-                        if args.wandb:
+                        if args.wandb and len(brain.buffer) >= brain.warmup:
                             joint_log = {
                                 f"joint_movement/env{i}/{name}": joint_delta_deg[j]
                                 for j, name in enumerate(JOINT_NAMES)
@@ -572,19 +587,12 @@ def training(args, env, simulation_app):
 
     except KeyboardInterrupt:
         print("\nclosing")
-        print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
+        brain.save_checkpoint(episode, steps, f"runs/LowLevel-{args.job_name}/Full")
         if args.wandb:
             wandb.finish()
-        env.close()
-        simulation_app.close()
-        brain.save_checkpoint(
-            episode, steps,
-            f"runs/LowLevel-{args.job_name}/Full"
-        )
+        os._exit(0)
 
     except Exception as e:
-        env.close()
-        simulation_app.close()
         print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
         import traceback
         crash = traceback.format_exc()
@@ -604,6 +612,7 @@ def training(args, env, simulation_app):
                 level=wandb.AlertLevel.ERROR,
             )
             wandb.finish(exit_code=1)
+        os._exit(0)
         raise
 
     brain.save_checkpoint(
@@ -611,6 +620,7 @@ def training(args, env, simulation_app):
         f"runs/LowLevel-{args.job_name}/Full"
     )
     print_final_success_rates(command_success_buf, ACTIVE_COMMANDS)
+    os._exit(0)
 
 
 def _update_curriculum_stage(base_env, stage: int, use_episode_curriculum: bool, fixed_episode_length_s: float):

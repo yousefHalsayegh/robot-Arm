@@ -1,18 +1,12 @@
+set -uo pipefail  
 
 
-set -uo pipefail   
-
-TASK="${TASK:-Player}"                
+TASK="${TASK:-Player}"                 # e.g. Isaac-Joystick-Play-v0
 EPISODES="${EPISODES:-5000}"
-FIXED_EPISODE_LENGTH_S="${FIXED_EPISODE_LENGTH_S:-10.0}"   
-
+FIXED_EPISODE_LENGTH_S="${FIXED_EPISODE_LENGTH_S:-10.0}"   # used only when curriculum is off
 
 NUM_ENVS_CAMERA="${NUM_ENVS_CAMERA:-64}"
 NUM_ENVS_NO_CAMERA="${NUM_ENVS_NO_CAMERA:-1024}"
-
-
-RUN_TIMEOUT_S="${RUN_TIMEOUT_S:-7200}"
-
 
 SUCCESS_THRESHOLD="${SUCCESS_THRESHOLD:-0.8}"
 
@@ -82,6 +76,7 @@ for entry in "${CONFIGS[@]}"; do
     echo "----------------------------------------"
   fi
 
+  
   SKIP_REASON=""
   if [[ "$PREREQS" != "-" ]]; then
     IFS=',' read -ra PREREQ_LIST <<< "$PREREQS"
@@ -127,11 +122,43 @@ for entry in "${CONFIGS[@]}"; do
 
   LOG_FILE="${LOG_DIR}/${JOB_NAME}.log"
 
+  
+  FULL_DIR="runs/LowLevel-${JOB_NAME}/Full"
+  CKPT_DIR="runs/LowLevel-${JOB_NAME}/Checkpoints"
+  RESUME_FLAG=""
+  RESUME_WANDB_ID=""
+
+  if compgen -G "${FULL_DIR}/manipulation_brain_*.pth" > /dev/null 2>&1; then
+    echo ""
+    echo ">>> Skipping: $JOB_NAME  (already completed — Full checkpoint exists at ${FULL_DIR})"
+    {
+      echo "- **${JOB_NAME}** — ALREADY COMPLETE (skipped, Full checkpoint found)"
+      echo "  - camera=${USE_CAMERA}, curriculum=${USE_CURR}, multi_task=${MULTI_TASK}, single_cmd=${SINGLE_CMD}, task_subset=${TASK_SUBSET}"
+    } >> "$SUMMARY_MD"
+    continue
+  elif compgen -G "${CKPT_DIR}/manipulation_brain_*.pth" > /dev/null 2>&1; then
+    LATEST_EP=$(ls "${CKPT_DIR}"/manipulation_brain_*.pth 2>/dev/null \
+      | sed -E 's/.*manipulation_brain_([0-9]+)\.pth/\1/' | sort -n | tail -n 1)
+    if [[ -n "$LATEST_EP" ]]; then
+      RESUME_FLAG="-chk=$LATEST_EP"
+      echo "    resuming from checkpoint at episode $LATEST_EP"
+    fi
+
+    
+    if [[ -f "$LOG_FILE" ]]; then
+      RESUME_WANDB_ID=$(grep -oE 'https://wandb\.ai/[^ ]+/runs/[^ ]+' "$LOG_FILE" \
+        | head -n 1 | sed -E 's#.*/runs/([^/?#]+).*#\1#')
+      if [[ -n "$RESUME_WANDB_ID" ]]; then
+        echo "    resuming wandb run: $RESUME_WANDB_ID"
+      fi
+    fi
+  fi
+
   echo ""
   echo ">>> Running: $JOB_NAME"
-  echo "    num_envs=$RUN_NUM_ENVS  timeout=${RUN_TIMEOUT_S}s  $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG"
+  echo "    num_envs=$RUN_NUM_ENVS  $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG $RESUME_FLAG"
 
-  timeout -k 60 "${RUN_TIMEOUT_S}s" train \
+  train \
     --task="$TASK" \
     --enable_cameras \
     --headless \
@@ -139,7 +166,8 @@ for entry in "${CONFIGS[@]}"; do
     -ep="$EPISODES" \
     -jn="$JOB_NAME" \
     --fixed_episode_length_s "$FIXED_EPISODE_LENGTH_S" \
-    $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG \
+    --wandb_resume_id "$RESUME_WANDB_ID" \
+    $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG $RESUME_FLAG \
     2>&1 | tee "$LOG_FILE"
 
   RUN_EXIT=${PIPESTATUS[0]}
@@ -148,10 +176,7 @@ for entry in "${CONFIGS[@]}"; do
   #   wandb: 🚀 View run at https://wandb.ai/<entity>/<project>/runs/<id>
   RUN_URL=$(grep -oE 'https://wandb\.ai/[^ ]+/runs/[^ ]+' "$LOG_FILE" | head -n 1)
 
-
-  if [[ "$RUN_EXIT" -eq 124 ]]; then
-    STATUS="TIMED OUT after ${RUN_TIMEOUT_S}s (killed)"
-  elif [[ "$RUN_EXIT" -ne 0 ]]; then
+  if [[ "$RUN_EXIT" -ne 0 ]]; then
     STATUS="FAILED (exit $RUN_EXIT)"
   else
     STATUS="completed"
@@ -164,7 +189,7 @@ for entry in "${CONFIGS[@]}"; do
   echo "    status: $STATUS"
   echo "    url:    $RUN_URL"
 
-
+  
   if [[ "$SINGLE_CMD" != "-" ]]; then
     metric_value=$(grep "^FINAL_SUCCESS_RATE|${SINGLE_CMD}|" "$LOG_FILE" | tail -n 1 | awk -F'|' '{print $3}')
 
