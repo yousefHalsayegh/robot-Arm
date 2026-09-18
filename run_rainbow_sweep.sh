@@ -38,7 +38,7 @@ RESOURCE_WATCH_INTERVAL_S="${RESOURCE_WATCH_INTERVAL_S:-120}"
 # done" reading in the gap between two jobs, which is exactly the race
 # this needs to avoid. Empty (default) means launch immediately.
 WAIT_FOR_SUMMARY="${WAIT_FOR_SUMMARY:-ablation_summary.md}"
-WAIT_POLL_INTERVAL_S="${WAIT_POLL_INTERVAL_S:-120}"
+WAIT_POLL_INTERVAL_S="${WAIT_POLL_INTERVAL_S:-3600}"
 
 mkdir -p "$LOGDIR"
 
