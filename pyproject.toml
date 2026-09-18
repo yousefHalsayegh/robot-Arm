@@ -18,6 +18,7 @@ random_agent = "sim.scripts.random_agent:main"
 play = "sim.scripts.generate:main"
 train = "sim.scripts.train:main"
 buffer = "sim.scripts.fill_buffer:main"
+inference = "sim.scripts.inference:main"
 
 [tool.uv]
 index-strategy = "unsafe-best-match"

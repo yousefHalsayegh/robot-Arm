@@ -122,34 +122,83 @@ for entry in "${CONFIGS[@]}"; do
 
   LOG_FILE="${LOG_DIR}/${JOB_NAME}.log"
 
-  
   FULL_DIR="runs/LowLevel-${JOB_NAME}/Full"
   CKPT_DIR="runs/LowLevel-${JOB_NAME}/Checkpoints"
   RESUME_FLAG=""
   RESUME_WANDB_ID=""
+  RESUME_WANDB_ENTITY=""
 
-  if compgen -G "${FULL_DIR}/manipulation_brain_*.pth" > /dev/null 2>&1; then
+  # ── find the highest-episode checkpoint across BOTH Full/ and
+  # Checkpoints/ ─────────────────────────────────────────────────────────
+  # A crash or interrupt now ALSO writes a checkpoint into Full/ (so its
+  # mere existence no longer means training reached the full episode
+  # target) — the genuinely furthest-along save could be sitting in either
+  # directory, so both are scanned and compared directly against EPISODES.
+  HIGHEST_EP=0
+  HIGHEST_PATH=""
+  for dir in "$FULL_DIR" "$CKPT_DIR"; do
+    if compgen -G "${dir}/manipulation_brain_*.pth" > /dev/null 2>&1; then
+      for f in "${dir}"/manipulation_brain_*.pth; do
+        ep=$(basename "$f" | sed -E 's/manipulation_brain_([0-9]+)\.pth/\1/')
+        if [[ "$ep" =~ ^[0-9]+$ ]] && (( ep > HIGHEST_EP )); then
+          HIGHEST_EP=$ep
+          HIGHEST_PATH="$f"
+        fi
+      done
+    fi
+  done
+
+  # A checkpoint can only be trusted if it was actually saved by a matching
+  # config — a leftover/misplaced checkpoint with the wrong use_camera
+  # would otherwise either be silently skipped as "already complete" or
+  # cause train.py's own architecture check to hard-fail on resume. Peek
+  # the checkpoint's saved flag directly and discard it if it disagrees
+  # with this job's own definition.
+  if (( HIGHEST_EP > 0 )); then
+    CKPT_USE_CAMERA=$(python3 -c "
+import torch, sys
+d = torch.load(sys.argv[1], map_location='cpu')
+print('true' if d.get('use_camera', True) else 'false')
+" "$HIGHEST_PATH" 2>/dev/null)
+
+    if [[ "$CKPT_USE_CAMERA" != "$USE_CAMERA" ]]; then
+      echo "    [warn] checkpoint at $HIGHEST_PATH has use_camera=$CKPT_USE_CAMERA but "
+      echo "           job '$JOB_NAME' requires use_camera=$USE_CAMERA — this checkpoint "
+      echo "           does not belong to this job's config; ignoring it and starting fresh"
+      HIGHEST_EP=0
+      HIGHEST_PATH=""
+    fi
+  fi
+
+  if (( HIGHEST_EP >= EPISODES )); then
     echo ""
-    echo ">>> Skipping: $JOB_NAME  (already completed — Full checkpoint exists at ${FULL_DIR})"
+    echo ">>> Skipping: $JOB_NAME  (already completed — checkpoint at episode $HIGHEST_EP >= target $EPISODES)"
     {
-      echo "- **${JOB_NAME}** — ALREADY COMPLETE (skipped, Full checkpoint found)"
+      echo "- **${JOB_NAME}** — ALREADY COMPLETE (skipped, checkpoint at episode ${HIGHEST_EP} >= target ${EPISODES})"
       echo "  - camera=${USE_CAMERA}, curriculum=${USE_CURR}, multi_task=${MULTI_TASK}, single_cmd=${SINGLE_CMD}, task_subset=${TASK_SUBSET}"
     } >> "$SUMMARY_MD"
     continue
-  elif compgen -G "${CKPT_DIR}/manipulation_brain_*.pth" > /dev/null 2>&1; then
-    LATEST_EP=$(ls "${CKPT_DIR}"/manipulation_brain_*.pth 2>/dev/null \
-      | sed -E 's/.*manipulation_brain_([0-9]+)\.pth/\1/' | sort -n | tail -n 1)
-    if [[ -n "$LATEST_EP" ]]; then
-      RESUME_FLAG="-chk=$LATEST_EP"
-      echo "    resuming from checkpoint at episode $LATEST_EP"
+  elif (( HIGHEST_EP > 0 )); then
+    # train.py's own checkpoint loader only ever looks inside Checkpoints/
+    # (ckpt_path = f"{ckpt_dir}/manipulation_brain_{args.checkpoint}.pth",
+    # ckpt_dir hardcoded to .../Checkpoints) — if the furthest-along save
+    # is actually sitting in Full/ (written by a crash/interrupt rather
+    # than a genuine mid-training mid_save), copy it into Checkpoints/
+    # under the same filename so that lookup finds it.
+    if [[ "$HIGHEST_PATH" == "${FULL_DIR}/"* ]]; then
+      mkdir -p "$CKPT_DIR"
+      cp "$HIGHEST_PATH" "${CKPT_DIR}/manipulation_brain_${HIGHEST_EP}.pth"
+      echo "    incomplete run (episode $HIGHEST_EP of $EPISODES) — copied its Full checkpoint into Checkpoints/ for resuming"
     fi
+    RESUME_FLAG="-chk=$HIGHEST_EP"
+    echo "    resuming from checkpoint at episode $HIGHEST_EP (target: $EPISODES)"
 
-    
     if [[ -f "$LOG_FILE" ]]; then
-      RESUME_WANDB_ID=$(grep -oE 'https://wandb\.ai/[^ ]+/runs/[^ ]+' "$LOG_FILE" \
-        | head -n 1 | sed -E 's#.*/runs/([^/?#]+).*#\1#')
+      WANDB_URL_PREV=$(grep -oE 'https://wandb\.ai/[^ ]+/runs/[^ ]+' "$LOG_FILE" | head -n 1)
+      RESUME_WANDB_ID=$(echo "$WANDB_URL_PREV" | sed -E 's|.*/runs/([^/?#]+).*|\1|')
+      RESUME_WANDB_ENTITY=$(echo "$WANDB_URL_PREV" | sed -E 's|https://wandb\.ai/([^/]+)/.*|\1|')
       if [[ -n "$RESUME_WANDB_ID" ]]; then
-        echo "    resuming wandb run: $RESUME_WANDB_ID"
+        echo "    resuming wandb run: $RESUME_WANDB_ENTITY/$RESUME_WANDB_ID"
       fi
     fi
   fi
@@ -167,8 +216,9 @@ for entry in "${CONFIGS[@]}"; do
     -jn="$JOB_NAME" \
     --fixed_episode_length_s "$FIXED_EPISODE_LENGTH_S" \
     --wandb_resume_id "$RESUME_WANDB_ID" \
+    --wandb_entity "$RESUME_WANDB_ENTITY" \
     $CAM_FLAG $CURR_FLAG $TASK_FLAG $CMD_FLAG $RESUME_FLAG \
-    2>&1 | tee "$LOG_FILE"
+    2>&1 | tee -a "$LOG_FILE"
 
   RUN_EXIT=${PIPESTATUS[0]}
 

@@ -105,32 +105,26 @@ class Brain:
 
     def predict_next_action_batch(
     self,
-    camera_states: np.ndarray,   # [N, 16, 224, 224]
-    joint_states:  np.ndarray,   # [N, 6]
+    camera_states: np.ndarray,
+    joint_states: np.ndarray,
     commands: np.ndarray,
     deterministic: bool = False,
     ) -> np.ndarray:
-        """
-        Batched version of predict_next_action — runs one forward pass for
-        all N envs instead of N separate calls. Returns [N, action_dim].
-        """
         with torch.no_grad():
             cam_t = torch.FloatTensor(camera_states).to(self.device) if self.use_camera else None
-            joint_t = torch.FloatTensor(joint_states).to(self.device)    # [N, 6]
+            joint_t = torch.FloatTensor(joint_states).to(self.device)
             cmd_t   = torch.LongTensor(commands).to(self.device)
 
             cam_emb = self._get_cam_emb(cam_t, joint_t.shape[0])
             joint_emb = self.joint_mlp(joint_t).detach()
 
             if deterministic:
-                fused  = torch.cat([cam_emb, joint_emb, cmd_t], dim=1)   # cmd_t is int64 concatenated with float32
-                hidden = self.actor.net(fused)
-                action = torch.tanh(self.actor.mean_head(hidden)) * ACTION_SCALE 
+                action = self.actor.deterministic_action(cam_emb, joint_emb, cmd_t)
             else:
                 action, _ = self.actor(cam_emb, joint_emb, cmd_t)
 
-        return action.cpu().numpy()   # [N, action_dim]
- 
+        return action.cpu().numpy()
+    
     def train(self):
         if len(self.buffer) < self.warmup:
             return 0, 0, {}
