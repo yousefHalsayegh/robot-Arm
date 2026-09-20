@@ -35,7 +35,7 @@ dist/
 **/.neptune/*
 docker/artifacts/
 *.tmp
-
+**/eval/
 # Isaac-Sim packman
 _isaac_sim*
 _repo
@@ -56,3 +56,4 @@ logs/
 */logs/
 *.csv
 **/sweep_export/
+**/random_file/

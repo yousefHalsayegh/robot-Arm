@@ -36,7 +36,7 @@ parser.add_argument("--checkpoints_file", type=str, default=None,
                           "every .pth file directly inside it. Combined with --checkpoints "
                           "if both are given.")
 parser.add_argument("--num_envs", type=int, default=16)
-parser.add_argument("--episodes_per_model", type=int, default=200,
+parser.add_argument("--episodes_per_model", type=int, default=20,
                      help="total episodes to run per model, split across num_envs")
 parser.add_argument("--eval_episode_length_s", type=float, default=10.0,
                      help="fixed episode length used for every model — no curriculum during eval")
@@ -106,7 +106,7 @@ def resolve_checkpoints_from_summary(summary_path: str):
 
     resolved = []
     for job_name in job_names:
-        full_dir = f"runs/LowLevel-{job_name}/Full"
+        full_dir = f"final/LowLevel-{job_name}/Full"
         matches = sorted(glob.glob(os.path.join(full_dir, "manipulation_brain_*.pth")))
         if not matches:
             print(f"[skip] {job_name}: no Full checkpoint at {full_dir} — "
