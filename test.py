@@ -7,7 +7,7 @@ import sys
 
 api = wandb.Api()
 
-sweep = api.sweep("models-imperial-college-london6785/RL for Games/2weqoipj")
+sweep = api.sweep("models-imperial-college-london6785/RL for Games/yzl0b9yn")
 runs = sweep.runs
 
 print(f"Found {len(runs)} runs")
