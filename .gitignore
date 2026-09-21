@@ -54,6 +54,5 @@ logs/
 *.pkl
 */runs/
 */logs/
-*.csv
 **/sweep_export/
 **/random_file/

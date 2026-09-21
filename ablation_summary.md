@@ -44,10 +44,10 @@ Sweep 3 (resume): 2026-09-18 19:36:24 UTC -> 2026-09-19 12:50:34 UTC
   - run: https://wandb.ai/models-imperial-college-london6785/RL%20for%20Games/runs/kd9x54rj
 - **left_up_no_camera** — ALREADY COMPLETE (checkpoint at episode 5255 >= target 5000)
   - camera=false, curriculum=true, multi_task=true, single_cmd=-, task_subset=left,up
-  - run: (not available in provided sweep logs — SKIPPED via prerequisite gate in Sweeps 1-2, never printed a run URL in those; must have been trained directly or in a sweep pass not covered by the provided files)
+  - run: https://wandb.ai/models-imperial-college-london6785/RL%20for%20Games/runs/3xylo330?nw=nwuseryousefhalsayegh
 - **up_down_no_camera** — ALREADY COMPLETE (checkpoint at episode 5151 >= target 5000)
   - camera=false, curriculum=true, multi_task=true, single_cmd=-, task_subset=up,down
-  - run: (not available in provided sweep logs — same situation as left_up_no_camera above)
+  - run: https://wandb.ai/models-imperial-college-london6785/RL%20for%20Games/runs/a2yhtgxx?nw=nwuseryousefhalsayegh
 - **all_no_camera** — completed
   - camera=false, curriculum=true, multi_task=true, single_cmd=-, task_subset=-, num_envs=1024
   - run: https://wandb.ai/models-imperial-college-london6785/RL%20for%20Games/runs/vgil7tlr

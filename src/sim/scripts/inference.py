@@ -36,11 +36,11 @@ parser.add_argument("--checkpoints_file", type=str, default=None,
                           "every .pth file directly inside it. Combined with --checkpoints "
                           "if both are given.")
 parser.add_argument("--num_envs", type=int, default=16)
-parser.add_argument("--episodes_per_model", type=int, default=20,
+parser.add_argument("--episodes_per_model", type=int, default=200,
                      help="total episodes to run per model, split across num_envs")
 parser.add_argument("--eval_episode_length_s", type=float, default=10.0,
                      help="fixed episode length used for every model — no curriculum during eval")
-parser.add_argument("--eval_decision_steps", type=int, default=50,
+parser.add_argument("--eval_decision_steps", type=int, default=100,
                      help="fixed decision-window length used for every model during eval")
 parser.add_argument("--deterministic", default=True, action=argparse.BooleanOptionalAction,
                      help="use the actor's deterministic (mean) action rather than sampling")
